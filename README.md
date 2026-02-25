@@ -4,13 +4,21 @@ A standalone library providing `Blur.BlurEffect` with corner radius support for 
 just copy of [ShellBlurEffect](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/main/src/shell-blur-effect.c) with
 corner mask and different gir namespace (`Blur`).
 
-### Build & install from source
+## Build & install 
+
+### From source
 
 ```bash
 cd gnome-rounded-blur
 meson setup build
 meson compile -C build
 sudo meson install -C build
+```
+
+### Arch
+
+```bash
+yay -S gnome-rounded-blur
 ```
 
 ### Usage in GNOME Shell Extensions
