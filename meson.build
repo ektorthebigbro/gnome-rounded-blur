@@ -21,8 +21,8 @@ libdir = join_paths(prefix, get_option('libdir'))
 includedir = join_paths(prefix, get_option('includedir'))
 datadir = join_paths(prefix, get_option('datadir'))
 
-mutter_api_version = '17'
-mutter_req = '>= 49.0'
+mutter_api_version = '18'
+mutter_req = '>= 50.0'
 
 clutter_pc = 'mutter-clutter-' + mutter_api_version
 cogl_pc = 'mutter-cogl-' + mutter_api_version
@@ -37,6 +37,7 @@ clutter_dep = dependency(clutter_pc, version: mutter_req,
 cogl_dep = dependency(cogl_pc, version: mutter_req,
   required: false,
 )
+libmutter_dep = dependency('libmutter-18')
 
 # Required dependencies
 deps = [
@@ -44,6 +45,7 @@ deps = [
   gobject_dep,
   clutter_dep,
   cogl_dep,
+  libmutter_dep
 ]
 
 # GObject Introspection

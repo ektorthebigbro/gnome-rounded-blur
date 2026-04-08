@@ -18,8 +18,6 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include <mtk/mtk.h>
-
 #include "rounded-blur-effect.h"
 
 //#include <cogl/cogl.h>
