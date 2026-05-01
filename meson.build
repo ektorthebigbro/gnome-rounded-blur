@@ -1,5 +1,5 @@
 project('gnome-rounded-blur', 'c',
-  version: '1.0.0',
+  version: '1.1.0',
   license: 'GPL-3.0-or-later',
   meson_version: '>= 0.56.0',
   default_options: [
@@ -24,20 +24,30 @@ datadir = join_paths(prefix, get_option('datadir'))
 mutter_api_version = '18'
 mutter_req = '>= 50.0'
 
+if not dependency('mutter-clutter-' + mutter_api_version, version: mutter_req, required: false).found()
+  mutter_api_version = '17'
+  mutter_req = '>= 49.0'
+endif
+
 clutter_pc = 'mutter-clutter-' + mutter_api_version
 cogl_pc = 'mutter-cogl-' + mutter_api_version
+libmutter_pc = 'libmutter-' + mutter_api_version
 
 # Dependencies
 glib_dep = dependency('glib-2.0', version: '>= 2.66')
 gobject_dep = dependency('gobject-2.0', version: '>= 2.66')
 clutter_dep = dependency(clutter_pc, version: mutter_req,
-  required: false,
+  required: true,
 )
 
 cogl_dep = dependency(cogl_pc, version: mutter_req,
-  required: false,
+  required: true,
 )
-libmutter_dep = dependency('libmutter-18')
+libmutter_dep = dependency(libmutter_pc, version: mutter_req)
+mutter_private_libdir = join_paths(
+  clutter_dep.get_variable(pkgconfig: 'libdir'),
+  'mutter-' + mutter_api_version,
+)
 
 # Required dependencies
 deps = [

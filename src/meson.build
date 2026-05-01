@@ -1,12 +1,14 @@
 # Library sources
 lib_sources = [
   'rounded-blur-effect.c',
+  'liquid-glass-effect.c',
   'rounded-blur-mode.c',
 ]
 
 # Library headers
 lib_headers = [
   'rounded-blur-effect.h',
+  'liquid-glass-effect.h',
 ]
 
 # Version information
@@ -22,6 +24,8 @@ gnome_rounded_blur = shared_library(
   dependencies: deps,
   version: meson.project_version(),
   soversion: major_version,
+  build_rpath: mutter_private_libdir,
+  install_rpath: mutter_private_libdir,
   install: true,
   install_dir: libdir,
 )
@@ -52,7 +56,7 @@ pkg = import('pkgconfig')
 pkg.generate(
   gnome_rounded_blur,
   name: project_name,
-  description: 'Library providing Blur.BlurEffect with corner radius support',
+  description: 'Library providing Blur.BlurEffect and Blur.LiquidGlassEffect',
   version: project_version,
   filebase: 'blur-effect-' + api_version,
   subdirs: 'blur-effect-' + api_version,

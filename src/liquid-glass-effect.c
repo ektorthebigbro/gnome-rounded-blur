@@ -1,4 +1,4 @@
-/* rounded-blur-effect.c
+/* liquid-glass-effect.c
  *
  * Copyright 2025 GNOME Rounded Blur
  *
@@ -18,7 +18,9 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-#include "rounded-blur-effect.h"
+#include <mtk/mtk.h>
+
+#include "liquid-glass-effect.h"
 
 #include <math.h>
 
@@ -32,16 +34,76 @@ static const gchar *brightness_glsl_declarations =
 static const gchar *brightness_glsl =
 "  cogl_color_out.rgb *= brightness;                                       \n";
 
-static const gchar *mask_glsl_declarations =
-"uniform float u_corner_radius;                                            \n"
-"uniform vec2  u_size;                                                     \n";
+static const gchar *size_glsl_declarations =
+"uniform vec2 u_size;                                                      \n"
+"uniform float u_corner_radius;                                            \n";
 
-static const gchar *mask_glsl =
+static const gchar *glass_lookup_glsl_declarations =
+"uniform float u_refraction;                                               \n";
+
+static const gchar *glass_lookup_glsl =
+"  vec2 uv = cogl_tex_coord.xy;                                            \n"
+"  vec2 half_size = max(u_size * 0.5, vec2(1.0));                          \n"
+"  float radius = clamp(u_corner_radius, 0.0, max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
+"  vec2 local = uv * u_size - half_size;                                   \n"
+"  vec2 box = max(half_size - vec2(radius), vec2(0.0));                    \n"
+"  vec2 q = abs(local) - box;                                              \n"
+"  vec2 outside = max(q, vec2(0.0));                                       \n"
+"  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;        \n"
+"  float outside_len = length(outside);                                    \n"
+"  vec2 axis_normal = (abs(q.x) > abs(q.y)) ? vec2(sign(local.x), 0.0) : vec2(0.0, sign(local.y));\n"
+"  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));   \n"
+"  vec2 normal = mix(axis_normal, corner_normal, step(0.001, outside_len));\n"
+"  float min_half = max(min(half_size.x, half_size.y), 1.0);               \n"
+"  float inside = clamp(-dist / min_half, 0.0, 1.0);                       \n"
+"  float edge_span = max(min(radius, min(u_size.x, u_size.y) * 0.22), 8.0);\n"
+"  float edge = 1.0 - smoothstep(0.0, edge_span, -dist);                   \n"
+"  float rim = edge * edge;                                                \n"
+"  vec2 center = normalize(local / half_size + vec2(0.0001));              \n"
+"  float falloff = clamp(1.0 - 2.3 * pow(5.2 * 2.7182818, -6.9 * inside - 0.7), 0.0, 1.0);\n"
+"  vec2 warped = local * falloff;                                          \n"
+"  vec2 lens = (warped - local) / max(u_size, vec2(1.0));                  \n"
+"  vec2 edge_bend = -normal * rim / max(u_size, vec2(1.0));                \n"
+"  vec2 center_bend = -center * smoothstep(0.08, 0.74, inside) * (1.0 - smoothstep(0.74, 1.0, inside)) / max(u_size, vec2(1.0));\n"
+"  float amount = clamp(u_refraction / 24.0, 0.0, 3.3333);                 \n"
+"  vec2 bend = lens * 0.55 + edge_bend * 7.5 + center_bend * 2.0;          \n"
+"  cogl_tex_coord.xy = clamp(uv + bend * amount,                           \n"
+"                            vec2(0.001), vec2(0.999));                   \n";
+
+static const gchar *glass_glsl_declarations =
+"uniform float u_saturation;                                               \n"
+"uniform float u_tint;                                                     \n"
+"uniform float u_highlight;                                                \n";
+
+static const gchar *glass_glsl =
+"  const vec3 luma_coeff = vec3(0.299, 0.587, 0.114);                      \n"
 "  vec2 uv = cogl_tex_coord_in[0].st;                                      \n"
 "  vec2 p  = uv * u_size;                                                  \n"
-"  vec2 q  = abs(p - 0.5 * u_size) - (0.5 * u_size - u_corner_radius);     \n"
-"  float dist = length(max(q, vec2(0.0))) - u_corner_radius;               \n"
-"  float m = step(dist, 0.0);                                              \n"
+"  float radius = clamp(u_corner_radius, 0.0, max(min(u_size.x, u_size.y) * 0.5 - 0.5, 0.0));\n"
+"  vec2 q  = abs(p - 0.5 * u_size) - max(0.5 * u_size - radius, vec2(0.0));\n"
+"  vec2 outside = max(q, vec2(0.0));                                       \n"
+"  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;        \n"
+"  float aa = 1.0;                                                         \n"
+"  float m = 1.0 - smoothstep(-aa, aa, dist);                              \n"
+"  float edge_span = max(min(radius, min(u_size.x, u_size.y) * 0.24), 8.0);\n"
+"  float edge = 1.0 - smoothstep(0.0, edge_span, -dist);                   \n"
+"  vec2 cp = uv * 2.0 - 1.0;                                               \n"
+"  vec2 power_normal = sign(cp) * pow(abs(cp) + vec2(0.0001), vec2(3.0));  \n"
+"  vec2 normal = normalize(power_normal + vec2(0.0001));                   \n"
+"  vec2 light_dir = normalize(vec2(-0.62, -0.78));                         \n"
+"  float rim = edge * edge;                                                \n"
+"  float fresnel = pow(clamp(rim, 0.0, 1.0), 1.35);                        \n"
+"  float front = pow(max(dot(normal, -light_dir), 0.0), 9.0) * rim;        \n"
+"  float back = pow(max(dot(-normal, -light_dir), 0.0), 4.0) * rim * 0.42; \n"
+"  float angle_glow = sin(atan(cp.y, cp.x) - 0.5) * 0.5 + 0.5;             \n"
+"  float glow = angle_glow * smoothstep(0.58, 0.0, -dist / max(min(u_size.x, u_size.y) * 0.5, 1.0));\n"
+"  float inner_shadow = smoothstep(0.35, 1.0, dot(cp, vec2(0.38, 0.82))) * rim;\n"
+"  float luma = dot(cogl_color_out.rgb, luma_coeff);                       \n"
+"  cogl_color_out.rgb = mix(vec3(luma), cogl_color_out.rgb, u_saturation); \n"
+"  cogl_color_out.rgb = mix(cogl_color_out.rgb, vec3(luma + 0.045), u_tint);\n"
+"  cogl_color_out.rgb *= 1.0 - inner_shadow * 0.13 * u_highlight;          \n"
+"  cogl_color_out.rgb *= 1.0 + (glow * 0.10 + fresnel * 0.08) * u_highlight;\n"
+"  cogl_color_out.rgb += vec3(1.0) * (front * 0.34 + back * 0.16 + fresnel * 0.10) * u_highlight;\n"
 "  cogl_color_out.rgb *= m;                                                \n"
 "  cogl_color_out.a   *= m;                                                \n";
 
@@ -61,7 +123,7 @@ typedef struct
   CoglTexture *texture;
 } FramebufferData;
 
-struct _GbBlurEffect
+struct _GbLiquidGlassEffect
 {
   ClutterEffect parent_instance;
 
@@ -81,6 +143,10 @@ struct _GbBlurEffect
   FramebufferData mask_fb;
   int corner_radius_uniform;
   int mask_size_uniform;
+  int saturation_uniform;
+  int tint_uniform;
+  int highlight_uniform;
+  int refraction_uniform;
 
   GbBlurMode mode;
   float downscale_factor;
@@ -88,9 +154,13 @@ struct _GbBlurEffect
   int radius;
 
   float corner_radius;
+  float saturation;
+  float tint;
+  float highlight;
+  float refraction;
 };
 
-G_DEFINE_TYPE (GbBlurEffect, gb_blur_effect, CLUTTER_TYPE_EFFECT)
+G_DEFINE_TYPE (GbLiquidGlassEffect, gb_liquid_glass_effect, CLUTTER_TYPE_EFFECT)
 
 enum {
   PROP_0,
@@ -98,6 +168,10 @@ enum {
   PROP_BRIGHTNESS,
   PROP_MODE,
   PROP_CORNER_RADIUS,
+  PROP_SATURATION,
+  PROP_TINT,
+  PROP_HIGHLIGHT,
+  PROP_REFRACTION,
   N_PROPS
 };
 
@@ -160,13 +234,29 @@ create_mask_pipeline (void)
 
   if (G_UNLIKELY (mask_pipeline == NULL))
   {
-    CoglSnippet *snippet;
+    CoglSnippet *fragment_snippet;
+    CoglSnippet *lookup_snippet;
+
     mask_pipeline = create_base_pipeline ();
-    snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
-                                mask_glsl_declarations,
-                                mask_glsl);
-    cogl_pipeline_add_snippet (mask_pipeline, snippet);
-    g_object_unref (snippet);
+
+    fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT_GLOBALS,
+                                         size_glsl_declarations,
+                                         NULL);
+    cogl_pipeline_add_snippet (mask_pipeline, fragment_snippet);
+    g_object_unref (fragment_snippet);
+
+    lookup_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_TEXTURE_LOOKUP,
+                                       glass_lookup_glsl_declarations,
+                                       NULL);
+    cogl_snippet_set_pre (lookup_snippet, glass_lookup_glsl);
+    cogl_pipeline_add_layer_snippet (mask_pipeline, 0, lookup_snippet);
+    g_object_unref (lookup_snippet);
+
+    fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
+                                         glass_glsl_declarations,
+                                         glass_glsl);
+    cogl_pipeline_add_snippet (mask_pipeline, fragment_snippet);
+    g_object_unref (fragment_snippet);
   }
 
   return cogl_pipeline_copy (mask_pipeline);
@@ -207,7 +297,7 @@ is_valid_mode (GbBlurMode mode)
 }
 
 static void
-update_brightness (GbBlurEffect *self,
+update_brightness (GbLiquidGlassEffect *self,
                    uint8_t        paint_opacity)
 {
   CoglColor color;
@@ -226,7 +316,7 @@ update_brightness (GbBlurEffect *self,
 }
 
 static void
-update_mask_uniforms (GbBlurEffect *self,
+update_mask_uniforms (GbLiquidGlassEffect *self,
                       float          width,
                       float          height)
 {
@@ -245,6 +335,26 @@ update_mask_uniforms (GbBlurEffect *self,
                                      self->mask_size_uniform,
                                      2, 1, size);
   }
+
+  if (self->saturation_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->saturation_uniform,
+                                  self->saturation);
+
+  if (self->tint_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->tint_uniform,
+                                  self->tint);
+
+  if (self->highlight_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->highlight_uniform,
+                                  self->highlight);
+
+  if (self->refraction_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->refraction_uniform,
+                                  self->refraction);
 }
 
 static void
@@ -273,7 +383,7 @@ update_fbo (FramebufferData *data,
   CoglContext *ctx;
   float new_width;
   float new_height;
-  
+
   if (!data->pipeline ||
       !is_valid_dimension (width) ||
       !is_valid_dimension (height) ||
@@ -318,7 +428,7 @@ update_fbo (FramebufferData *data,
 }
 
 static gboolean
-update_actor_fbo (GbBlurEffect *self,
+update_actor_fbo (GbLiquidGlassEffect *self,
                   float          width,
                   float          height,
                   float          downscale_factor)
@@ -337,7 +447,7 @@ update_actor_fbo (GbBlurEffect *self,
 }
 
 static gboolean
-update_brightness_fbo (GbBlurEffect *self,
+update_brightness_fbo (GbLiquidGlassEffect *self,
                        float          width,
                        float          height,
                        float          downscale_factor)
@@ -356,7 +466,7 @@ update_brightness_fbo (GbBlurEffect *self,
 }
 
 static gboolean
-update_background_fbo (GbBlurEffect *self,
+update_background_fbo (GbLiquidGlassEffect *self,
                        float          width,
                        float          height)
 {
@@ -371,7 +481,7 @@ update_background_fbo (GbBlurEffect *self,
 }
 
 static gboolean
-update_mask_fbo (GbBlurEffect *self,
+update_mask_fbo (GbLiquidGlassEffect *self,
                  float          width,
                  float          height,
                  float          downscale_factor)
@@ -416,13 +526,13 @@ calculate_downscale_factor (float width,
 }
 
 static void
-gb_blur_effect_set_actor (ClutterActorMeta *meta,
+gb_liquid_glass_effect_set_actor (ClutterActorMeta *meta,
                            ClutterActor     *actor)
 {
-  GbBlurEffect *self = GB_BLUR_EFFECT (meta);
+  GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (meta);
   ClutterActorMetaClass *meta_class;
 
-  meta_class = CLUTTER_ACTOR_META_CLASS (gb_blur_effect_parent_class);
+  meta_class = CLUTTER_ACTOR_META_CLASS (gb_liquid_glass_effect_parent_class);
   meta_class->set_actor (meta, actor);
 
   /* clear out the previous state */
@@ -436,7 +546,7 @@ gb_blur_effect_set_actor (ClutterActorMeta *meta,
 }
 
 static void
-update_actor_box (GbBlurEffect       *self,
+update_actor_box (GbLiquidGlassEffect       *self,
                   ClutterPaintContext *paint_context,
                   ClutterActorBox     *source_actor_box)
 {
@@ -485,7 +595,7 @@ update_actor_box (GbBlurEffect       *self,
 }
 
 static void
-add_blurred_pipeline (GbBlurEffect    *self,
+add_blurred_pipeline (GbLiquidGlassEffect    *self,
                       ClutterPaintNode *node,
                       uint8_t           paint_opacity)
 {
@@ -501,7 +611,7 @@ add_blurred_pipeline (GbBlurEffect    *self,
   update_mask_uniforms (self, width, height);
 
   pipeline_node = clutter_pipeline_node_new (self->mask_fb.pipeline);
-  clutter_paint_node_set_static_name (pipeline_node, "GbBlurEffect (final)");
+  clutter_paint_node_set_static_name (pipeline_node, "GbLiquidGlassEffect (final)");
   clutter_paint_node_add_child (node, pipeline_node);
 
   clutter_paint_node_add_rectangle (pipeline_node,
@@ -513,7 +623,7 @@ add_blurred_pipeline (GbBlurEffect    *self,
 }
 
 static ClutterPaintNode *
-create_blur_nodes (GbBlurEffect    *self,
+create_blur_nodes (GbLiquidGlassEffect    *self,
                    ClutterPaintNode *node,
                    uint8_t           paint_opacity)
 {
@@ -528,7 +638,7 @@ create_blur_nodes (GbBlurEffect    *self,
   update_mask_uniforms (self, width, height);
   mask_node = clutter_layer_node_new_to_framebuffer (self->mask_fb.framebuffer,
                                                      self->mask_fb.pipeline);
-  clutter_paint_node_set_static_name (mask_node, "ShellBlurEffect (mask)");
+  clutter_paint_node_set_static_name (mask_node, "ShellLiquidGlassEffect (mask)");
   clutter_paint_node_add_child (node, mask_node);
   clutter_paint_node_add_rectangle (mask_node,
                                     &(ClutterActorBox) {
@@ -539,7 +649,7 @@ create_blur_nodes (GbBlurEffect    *self,
   update_brightness (self, paint_opacity);
   brightness_node = clutter_layer_node_new_to_framebuffer (self->brightness_fb.framebuffer,
                                                            self->brightness_fb.pipeline);
-  clutter_paint_node_set_static_name (brightness_node, "ShellBlurEffect (brightness)");
+  clutter_paint_node_set_static_name (brightness_node, "ShellLiquidGlassEffect (brightness)");
   clutter_paint_node_add_child (mask_node, brightness_node);
   clutter_paint_node_add_rectangle (brightness_node,
                                     &(ClutterActorBox) {
@@ -551,7 +661,7 @@ create_blur_nodes (GbBlurEffect    *self,
   blur_node = clutter_blur_node_new (self->tex_width / self->downscale_factor,
                                      self->tex_height / self->downscale_factor,
                                      self->radius / self->downscale_factor);
-  clutter_paint_node_set_static_name (blur_node, "ShellBlurEffect (blur)");
+  clutter_paint_node_set_static_name (blur_node, "ShellLiquidGlassEffect (blur)");
   clutter_paint_node_add_child (brightness_node, blur_node);
   clutter_paint_node_add_rectangle (blur_node,
                                     &(ClutterActorBox) {
@@ -566,7 +676,7 @@ create_blur_nodes (GbBlurEffect    *self,
 }
 
 static void
-paint_background (GbBlurEffect      *self,
+paint_background (GbLiquidGlassEffect      *self,
                   ClutterPaintNode    *node,
                   ClutterPaintContext *paint_context,
                   ClutterActorBox     *source_actor_box)
@@ -590,7 +700,7 @@ paint_background (GbBlurEffect      *self,
   background_node =
     clutter_layer_node_new_to_framebuffer (self->background_fb.framebuffer,
                                            self->background_fb.pipeline);
-  clutter_paint_node_set_static_name (background_node, "GbBlurEffect (background)");
+  clutter_paint_node_set_static_name (background_node, "GbLiquidGlassEffect (background)");
   clutter_paint_node_add_child (node, background_node);
   clutter_paint_node_add_rectangle (background_node,
                                     &(ClutterActorBox) {
@@ -602,7 +712,7 @@ paint_background (GbBlurEffect      *self,
   /* Blit node */
   src = clutter_paint_context_get_framebuffer (paint_context);
   blit_node = clutter_blit_node_new (src);
-  clutter_paint_node_set_static_name (blit_node, "GbBlurEffect (blit)");
+  clutter_paint_node_set_static_name (blit_node, "GbLiquidGlassEffect (blit)");
   clutter_paint_node_add_child (background_node, blit_node);
   clutter_blit_node_add_blit_rectangle (CLUTTER_BLIT_NODE (blit_node),
                                         transformed_x,
@@ -613,7 +723,7 @@ paint_background (GbBlurEffect      *self,
 }
 
 static gboolean
-update_framebuffers (GbBlurEffect       *self,
+update_framebuffers (GbLiquidGlassEffect       *self,
                      ClutterActorBox     *source_actor_box)
 {
   gboolean updated = FALSE;
@@ -646,7 +756,7 @@ update_framebuffers (GbBlurEffect       *self,
 }
 
 static void
-add_actor_node (GbBlurEffect    *self,
+add_actor_node (GbLiquidGlassEffect    *self,
                 ClutterPaintNode *node,
                 int               opacity)
 {
@@ -657,7 +767,7 @@ add_actor_node (GbBlurEffect    *self,
 }
 
 static void
-paint_actor_offscreen (GbBlurEffect           *self,
+paint_actor_offscreen (GbLiquidGlassEffect           *self,
                        ClutterPaintNode        *node,
                        ClutterEffectPaintFlags  flags)
 {
@@ -675,7 +785,7 @@ paint_actor_offscreen (GbBlurEffect           *self,
       /* Layer node */
       layer_node = clutter_layer_node_new_to_framebuffer (self->actor_fb.framebuffer,
                                                           self->actor_fb.pipeline);
-      clutter_paint_node_set_static_name (layer_node, "GbBlurEffect (actor offscreen)");
+      clutter_paint_node_set_static_name (layer_node, "GbLiquidGlassEffect (actor offscreen)");
       clutter_paint_node_add_child (node, layer_node);
       clutter_paint_node_add_rectangle (layer_node,
                                         &(ClutterActorBox) {
@@ -690,7 +800,7 @@ paint_actor_offscreen (GbBlurEffect           *self,
                                   1.f / self->downscale_factor,
                                   1.f);
       transform_node = clutter_transform_node_new (&transform);
-      clutter_paint_node_set_static_name (transform_node, "GbBlurEffect (downscale)");
+      clutter_paint_node_set_static_name (transform_node, "GbLiquidGlassEffect (downscale)");
       clutter_paint_node_add_child (layer_node, transform_node);
 
       /* Actor node */
@@ -704,7 +814,7 @@ paint_actor_offscreen (GbBlurEffect           *self,
 
       pipeline_node = clutter_pipeline_node_new (self->actor_fb.pipeline);
       clutter_paint_node_set_static_name (pipeline_node,
-                                          "GbBlurEffect (actor texture)");
+                                          "GbLiquidGlassEffect (actor texture)");
       clutter_paint_node_add_child (node, pipeline_node);
       clutter_paint_node_add_rectangle (pipeline_node,
                                         &(ClutterActorBox) {
@@ -716,7 +826,7 @@ paint_actor_offscreen (GbBlurEffect           *self,
 }
 
 static gboolean
-needs_repaint (GbBlurEffect         *self,
+needs_repaint (GbLiquidGlassEffect         *self,
                ClutterEffectPaintFlags  flags)
 {
   gboolean actor_cached;
@@ -740,12 +850,12 @@ needs_repaint (GbBlurEffect         *self,
 }
 
 static void
-gb_blur_effect_paint_node (ClutterEffect           *effect,
+gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
                               ClutterPaintNode        *node,
                               ClutterPaintContext     *paint_context,
                               ClutterEffectPaintFlags  flags)
 {
-  GbBlurEffect *self = GB_BLUR_EFFECT (effect);
+  GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (effect);
   uint8_t paint_opacity;
 
   if (!self->actor)
@@ -824,9 +934,9 @@ fail:
 }
 
 static void
-gb_blur_effect_finalize (GObject *object)
+gb_liquid_glass_effect_finalize (GObject *object)
 {
-  GbBlurEffect *self = (GbBlurEffect *)object;
+  GbLiquidGlassEffect *self = (GbLiquidGlassEffect *)object;
 
   clear_framebuffer_data (&self->actor_fb);
   clear_framebuffer_data (&self->background_fb);
@@ -838,16 +948,16 @@ gb_blur_effect_finalize (GObject *object)
   g_clear_object (&self->brightness_fb.pipeline);
   g_clear_object (&self->mask_fb.pipeline);
 
-  G_OBJECT_CLASS (gb_blur_effect_parent_class)->finalize (object);
+  G_OBJECT_CLASS (gb_liquid_glass_effect_parent_class)->finalize (object);
 }
 
 static void
-gb_blur_effect_get_property (GObject    *object,
+gb_liquid_glass_effect_get_property (GObject    *object,
                                 guint       prop_id,
                                 GValue     *value,
                                 GParamSpec *pspec)
 {
-  GbBlurEffect *self = GB_BLUR_EFFECT (object);
+  GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (object);
 
   switch (prop_id)
     {
@@ -867,35 +977,67 @@ gb_blur_effect_get_property (GObject    *object,
       g_value_set_float (value, self->corner_radius);
       break;
 
+    case PROP_SATURATION:
+      g_value_set_float (value, self->saturation);
+      break;
+
+    case PROP_TINT:
+      g_value_set_float (value, self->tint);
+      break;
+
+    case PROP_HIGHLIGHT:
+      g_value_set_float (value, self->highlight);
+      break;
+
+    case PROP_REFRACTION:
+      g_value_set_float (value, self->refraction);
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
 }
 
 static void
-gb_blur_effect_set_property (GObject      *object,
+gb_liquid_glass_effect_set_property (GObject      *object,
                                 guint         prop_id,
                                 const GValue *value,
                                 GParamSpec   *pspec)
 {
-  GbBlurEffect *self = GB_BLUR_EFFECT (object);
+  GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (object);
 
   switch (prop_id)
     {
     case PROP_RADIUS:
-      gb_blur_effect_set_radius (self, g_value_get_int (value));
+      gb_liquid_glass_effect_set_radius (self, g_value_get_int (value));
       break;
 
     case PROP_BRIGHTNESS:
-      gb_blur_effect_set_brightness (self, g_value_get_float (value));
+      gb_liquid_glass_effect_set_brightness (self, g_value_get_float (value));
       break;
 
     case PROP_MODE:
-      gb_blur_effect_set_mode (self, g_value_get_enum (value));
+      gb_liquid_glass_effect_set_mode (self, g_value_get_enum (value));
       break;
 
     case PROP_CORNER_RADIUS:
-      gb_blur_effect_set_corner_radius (self, g_value_get_float (value));
+      gb_liquid_glass_effect_set_corner_radius (self, g_value_get_float (value));
+      break;
+
+    case PROP_SATURATION:
+      gb_liquid_glass_effect_set_saturation (self, g_value_get_float (value));
+      break;
+
+    case PROP_TINT:
+      gb_liquid_glass_effect_set_tint (self, g_value_get_float (value));
+      break;
+
+    case PROP_HIGHLIGHT:
+      gb_liquid_glass_effect_set_highlight (self, g_value_get_float (value));
+      break;
+
+    case PROP_REFRACTION:
+      gb_liquid_glass_effect_set_refraction (self, g_value_get_float (value));
       break;
 
     default:
@@ -904,19 +1046,19 @@ gb_blur_effect_set_property (GObject      *object,
 }
 
 static void
-gb_blur_effect_class_init (GbBlurEffectClass *klass)
+gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
   ClutterActorMetaClass *meta_class = CLUTTER_ACTOR_META_CLASS (klass);
   ClutterEffectClass *effect_class = CLUTTER_EFFECT_CLASS (klass);
 
-  object_class->finalize = gb_blur_effect_finalize;
-  object_class->get_property = gb_blur_effect_get_property;
-  object_class->set_property = gb_blur_effect_set_property;
+  object_class->finalize = gb_liquid_glass_effect_finalize;
+  object_class->get_property = gb_liquid_glass_effect_get_property;
+  object_class->set_property = gb_liquid_glass_effect_set_property;
 
-  meta_class->set_actor = gb_blur_effect_set_actor;
+  meta_class->set_actor = gb_liquid_glass_effect_set_actor;
 
-  effect_class->paint_node = gb_blur_effect_paint_node;
+  effect_class->paint_node = gb_liquid_glass_effect_paint_node;
 
   properties[PROP_RADIUS] =
     g_param_spec_int ("radius", NULL, NULL,
@@ -939,16 +1081,40 @@ gb_blur_effect_class_init (GbBlurEffectClass *klass)
                         0.f, G_MAXFLOAT, 0.f,
                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
 
+  properties[PROP_SATURATION] =
+    g_param_spec_float ("saturation", NULL, NULL,
+                        0.f, 3.f, 1.05f,
+                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_TINT] =
+    g_param_spec_float ("tint", NULL, NULL,
+                        0.f, 1.f, 0.02f,
+                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_HIGHLIGHT] =
+    g_param_spec_float ("highlight", NULL, NULL,
+                        0.f, 1.f, 0.35f,
+                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_REFRACTION] =
+    g_param_spec_float ("refraction", NULL, NULL,
+                        0.f, 80.f, 24.f,
+                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
   g_object_class_install_properties (object_class, N_PROPS, properties);
 }
 
 static void
-gb_blur_effect_init (GbBlurEffect *self)
+gb_liquid_glass_effect_init (GbLiquidGlassEffect *self)
 {
   self->mode = GB_BLUR_MODE_ACTOR;
   self->radius = 0;
   self->brightness = 1.f;
   self->corner_radius = 0.f;
+  self->saturation = 1.05f;
+  self->tint = 0.02f;
+  self->highlight = 0.35f;
+  self->refraction = 24.f;
 
   self->actor_fb.pipeline = create_base_pipeline ();
   self->background_fb.pipeline = create_base_pipeline ();
@@ -960,27 +1126,35 @@ gb_blur_effect_init (GbBlurEffect *self)
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_corner_radius");
   self->mask_size_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size");
+  self->saturation_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_saturation");
+  self->tint_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_tint");
+  self->highlight_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_highlight");
+  self->refraction_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_refraction");
 }
 
-GbBlurEffect *
-gb_blur_effect_new (void)
+GbLiquidGlassEffect *
+gb_liquid_glass_effect_new (void)
 {
-  return g_object_new (GB_TYPE_BLUR_EFFECT, NULL);
+  return g_object_new (GB_TYPE_LIQUID_GLASS_EFFECT, NULL);
 }
 
 int
-gb_blur_effect_get_radius (GbBlurEffect *self)
+gb_liquid_glass_effect_get_radius (GbLiquidGlassEffect *self)
 {
-  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), 0);
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0);
 
   return self->radius;
 }
 
 void
-gb_blur_effect_set_radius (GbBlurEffect *self,
+gb_liquid_glass_effect_set_radius (GbLiquidGlassEffect *self,
                               int           radius)
 {
-  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
   radius = MAX (0, radius);
 
@@ -997,18 +1171,18 @@ gb_blur_effect_set_radius (GbBlurEffect *self,
 }
 
 float
-gb_blur_effect_get_brightness (GbBlurEffect *self)
+gb_liquid_glass_effect_get_brightness (GbLiquidGlassEffect *self)
 {
-  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), -1);
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), -1);
 
   return self->brightness;
 }
 
 void
-gb_blur_effect_set_brightness (GbBlurEffect *self,
+gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
                                   float            brightness)
 {
-  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
   brightness = sanitize_float_property (brightness, 0.f, 1.f, 1.f);
 
@@ -1025,18 +1199,18 @@ gb_blur_effect_set_brightness (GbBlurEffect *self,
 }
 
 GbBlurMode
-gb_blur_effect_get_mode (GbBlurEffect *self)
+gb_liquid_glass_effect_get_mode (GbLiquidGlassEffect *self)
 {
-  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), GB_BLUR_MODE_ACTOR);
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), GB_BLUR_MODE_ACTOR);
 
   return self->mode;
 }
 
 void
-gb_blur_effect_set_mode (GbBlurEffect *self,
+gb_liquid_glass_effect_set_mode (GbLiquidGlassEffect *self,
                             GbBlurMode    mode)
 {
-  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
   if (!is_valid_mode (mode))
     mode = GB_BLUR_MODE_ACTOR;
@@ -1066,17 +1240,17 @@ gb_blur_effect_set_mode (GbBlurEffect *self,
 }
 
 float
-gb_blur_effect_get_corner_radius (GbBlurEffect *self)
+gb_liquid_glass_effect_get_corner_radius (GbLiquidGlassEffect *self)
 {
-  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), 0.f);
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
   return self->corner_radius;
 }
 
 void
-gb_blur_effect_set_corner_radius (GbBlurEffect *self,
+gb_liquid_glass_effect_set_corner_radius (GbLiquidGlassEffect *self,
                                      float          corner_radius)
 {
-  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
   corner_radius = sanitize_float_property (corner_radius, 0.f, G_MAXFLOAT, 0.f);
 
@@ -1090,4 +1264,112 @@ gb_blur_effect_set_corner_radius (GbBlurEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_CORNER_RADIUS]);
+}
+
+float
+gb_liquid_glass_effect_get_saturation (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 1.f);
+  return self->saturation;
+}
+
+void
+gb_liquid_glass_effect_set_saturation (GbLiquidGlassEffect *self,
+                                       float                saturation)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  saturation = sanitize_float_property (saturation, 0.f, 3.f, 1.f);
+
+  if (self->saturation == saturation)
+    return;
+
+  self->saturation = saturation;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SATURATION]);
+}
+
+float
+gb_liquid_glass_effect_get_tint (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->tint;
+}
+
+void
+gb_liquid_glass_effect_set_tint (GbLiquidGlassEffect *self,
+                                 float                tint)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  tint = sanitize_float_property (tint, 0.f, 1.f, 0.f);
+
+  if (self->tint == tint)
+    return;
+
+  self->tint = tint;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_TINT]);
+}
+
+float
+gb_liquid_glass_effect_get_highlight (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->highlight;
+}
+
+void
+gb_liquid_glass_effect_set_highlight (GbLiquidGlassEffect *self,
+                                      float                highlight)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  highlight = sanitize_float_property (highlight, 0.f, 1.f, 0.f);
+
+  if (self->highlight == highlight)
+    return;
+
+  self->highlight = highlight;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_HIGHLIGHT]);
+}
+
+float
+gb_liquid_glass_effect_get_refraction (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->refraction;
+}
+
+void
+gb_liquid_glass_effect_set_refraction (GbLiquidGlassEffect *self,
+                                       float                refraction)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  refraction = sanitize_float_property (refraction, 0.f, 80.f, 0.f);
+
+  if (self->refraction == refraction)
+    return;
+
+  self->refraction = refraction;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REFRACTION]);
 }
