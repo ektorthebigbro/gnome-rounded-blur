@@ -18,7 +18,7 @@ sudo dnf install mutter-devel
 
 ```bash
 cd gnome-rounded-blur
-meson setup build
+meson setup build --reconfigure --prefix=/usr --libdir=/usr/lib64
 meson compile -C build
 sudo meson install -C build
 ```
