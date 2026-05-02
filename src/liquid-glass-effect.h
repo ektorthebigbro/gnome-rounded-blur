@@ -24,35 +24,32 @@
 
 G_BEGIN_DECLS
 
-#define GB_TYPE_LIQUID_GLASS_EFFECT (gb_liquid_glass_effect_get_type())
+#define GB_TYPE_LIQUID_GLASS_EFFECT \
+  (gb_liquid_glass_effect_get_type ())
 
-G_DECLARE_FINAL_TYPE (GbLiquidGlassEffect, gb_liquid_glass_effect, GB, LIQUID_GLASS_EFFECT, ClutterEffect)
+G_DECLARE_FINAL_TYPE (GbLiquidGlassEffect,
+                      gb_liquid_glass_effect,
+                      GB,
+                      LIQUID_GLASS_EFFECT,
+                      ClutterEffect)
 
 GbLiquidGlassEffect *gb_liquid_glass_effect_new (void);
 
 int gb_liquid_glass_effect_get_radius (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_radius (GbLiquidGlassEffect *self,
-                                   int            radius);
+                                        int                  radius);
 
 float gb_liquid_glass_effect_get_brightness (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
-                                       float          brightness);
+                                            float                brightness);
 
 GbBlurMode gb_liquid_glass_effect_get_mode (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_mode (GbLiquidGlassEffect *self,
-                                 GbBlurMode    mode);
+                                      GbBlurMode           mode);
 
 float gb_liquid_glass_effect_get_corner_radius (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_corner_radius (GbLiquidGlassEffect *self,
-                                        float          corner_radius);
-
-float gb_liquid_glass_effect_get_saturation (GbLiquidGlassEffect *self);
-void gb_liquid_glass_effect_set_saturation (GbLiquidGlassEffect *self,
-                                            float                saturation);
-
-float gb_liquid_glass_effect_get_tint (GbLiquidGlassEffect *self);
-void gb_liquid_glass_effect_set_tint (GbLiquidGlassEffect *self,
-                                      float                tint);
+                                               float                corner_radius);
 
 float gb_liquid_glass_effect_get_highlight (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_highlight (GbLiquidGlassEffect *self,
@@ -61,5 +58,9 @@ void gb_liquid_glass_effect_set_highlight (GbLiquidGlassEffect *self,
 float gb_liquid_glass_effect_get_refraction (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_refraction (GbLiquidGlassEffect *self,
                                             float                refraction);
+
+float gb_liquid_glass_effect_get_depth (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_depth (GbLiquidGlassEffect *self,
+                                       float                depth);
 
 G_END_DECLS

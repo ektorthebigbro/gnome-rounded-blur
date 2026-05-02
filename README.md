@@ -1,7 +1,7 @@
 ## GNOME Rounded Blur
 
 A standalone library providing `Blur.BlurEffect` with corner radius support for GNOME Shell extensions. It also exposes
-`Blur.LiquidGlassEffect`, a separate blur effect with refraction, saturation, tint, and highlight controls for
+`Blur.LiquidGlassEffect`, a separate blur effect with refraction, depth, and highlight controls for
 liquid-glass style surfaces. Basically it's
 just copy of [ShellBlurEffect](https://gitlab.gnome.org/GNOME/gnome-shell/-/blob/main/src/shell-blur-effect.c) with
 corner mask and different gir namespace (`Blur`).
@@ -67,10 +67,9 @@ const MyLiquidGlassEffect = GObject.registerClass({
             radius: 36,
             brightness: 0.72,
             corner_radius: 18,
-            saturation: 1.45,
-            tint: 0.2,
             highlight: 0.75,
             refraction: 28,
+            depth: 6.9,
             ...params
         });
     }

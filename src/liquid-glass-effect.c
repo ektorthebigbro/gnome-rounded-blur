@@ -24,99 +24,130 @@
 
 #include <math.h>
 
-//#include <cogl/cogl.h>
-
-//#include "bsm-enum-types.h"
-
 static const gchar *brightness_glsl_declarations =
-"uniform float brightness;                                                 \n";
+  "uniform float brightness;\n";
 
 static const gchar *brightness_glsl =
-"  cogl_color_out.rgb *= brightness;                                       \n";
+  "  cogl_color_out.rgb *= brightness;\n";
 
 static const gchar *size_glsl_declarations =
-"uniform vec2 u_size;                                                      \n"
-"uniform float u_corner_radius;                                            \n";
+  "uniform vec2 u_size;\n"
+  "uniform float u_corner_radius;\n";
 
 static const gchar *glass_lookup_glsl_declarations =
-"uniform float u_refraction;                                               \n";
+  "uniform float u_refraction;\n"
+  "uniform float u_depth;\n";
 
 static const gchar *glass_lookup_glsl =
-"  vec2 uv = cogl_tex_coord.xy;                                            \n"
-"  vec2 size = max(u_size, vec2(1.0));                                     \n"
-"  const float FIGMA_A = 0.7;                                              \n"
-"  const float FIGMA_B = 2.3;                                              \n"
-"  const float FIGMA_C = 5.2;                                              \n"
-"  const float FIGMA_DEPTH = 6.9;                                          \n"
-"  const float FIGMA_F_POWER = 3.0;                                        \n"
-"  vec2 half_size = max(size * 0.5, vec2(1.0));                            \n"
-"  float radius = clamp(u_corner_radius, 0.0, max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
-"  vec2 local = uv * size - half_size;                                     \n"
-"  vec2 box = max(half_size - vec2(radius), vec2(0.0));                    \n"
-"  vec2 q = abs(local) - box;                                              \n"
-"  vec2 outside = max(q, vec2(0.0));                                       \n"
-"  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;        \n"
-"  float outside_len = length(outside);                                    \n"
-"  vec2 axis_normal = (q.x > q.y) ? vec2(sign(local.x), 0.0) : vec2(0.0, sign(local.y));\n"
-"  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));   \n"
-"  vec2 normal = mix(axis_normal, corner_normal, step(0.001, outside_len));\n"
-"  float min_half = max(min(half_size.x, half_size.y), 1.0);               \n"
-"  float inside = clamp(-dist / min_half, 0.0, 1.0);                       \n"
-"  float lens = clamp(1.0 - FIGMA_B * exp(-FIGMA_DEPTH * inside - FIGMA_A) * FIGMA_C, 0.0, 1.0);\n"
-"  vec2 base = local / size;                                               \n"
-"  vec2 compressed = base * pow(lens, FIGMA_F_POWER);                     \n"
-"  float rim = 1.0 - smoothstep(0.0, max(min(radius, min(size.x, size.y) * 0.22), 8.0), -dist);\n"
-"  float body = smoothstep(0.04, 0.72, inside) * (1.0 - smoothstep(0.72, 1.0, inside));\n"
-"  vec2 lens_bend = compressed - base;                                     \n"
-"  vec2 rim_bend = -normal * rim * rim * 7.5 / size;                       \n"
-"  vec2 body_bend = -normalize(base + vec2(0.0001)) * body * 0.035;        \n"
-"  float amount = clamp(u_refraction / 24.0, 0.0, 3.3333);                 \n"
-"  vec2 bend = lens_bend * 0.75 + rim_bend + body_bend;                    \n"
-"  cogl_tex_coord.xy = clamp(uv + bend * amount,                           \n"
-"                            vec2(0.001), vec2(0.999));                   \n";
+  "  vec2 uv = cogl_tex_coord.xy;\n"
+  "  vec2 size = max(u_size, vec2(1.0));\n"
+  "  vec2 half_size = max(size * 0.5, vec2(1.0));\n"
+  "  float radius = clamp(u_corner_radius,\n"
+  "                       0.0,\n"
+  "                       max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
+  "\n"
+  "  const float FIGMA_A = 0.7;\n"
+  "  const float FIGMA_B = 2.3;\n"
+  "  const float FIGMA_C = 5.2;\n"
+  "  const float FIGMA_F_POWER = 3.0;\n"
+  "\n"
+  "  vec2 local = uv * size - half_size;\n"
+  "  vec2 box = max(half_size - vec2(radius), vec2(0.0));\n"
+  "  vec2 q = abs(local) - box;\n"
+  "  vec2 outside = max(q, vec2(0.0));\n"
+  "\n"
+  "  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;\n"
+  "  float outside_len = length(outside);\n"
+  "\n"
+  "  vec2 axis_normal = (q.x > q.y)\n"
+  "    ? vec2(sign(local.x), 0.0)\n"
+  "    : vec2(0.0, sign(local.y));\n"
+  "  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));\n"
+  "  vec2 normal = mix(axis_normal,\n"
+  "                    corner_normal,\n"
+  "                    step(0.001, outside_len));\n"
+  "\n"
+  "  float min_half = max(min(half_size.x, half_size.y), 1.0);\n"
+  "  float inside = clamp(-dist / min_half, 0.0, 1.0);\n"
+  "  float lens = clamp(1.0 -\n"
+  "                     FIGMA_B * exp(-u_depth * inside - FIGMA_A) *\n"
+  "                     FIGMA_C,\n"
+  "                     0.0,\n"
+  "                     1.0);\n"
+  "\n"
+  "  vec2 base = local / size;\n"
+  "  vec2 compressed = base * pow(lens, FIGMA_F_POWER);\n"
+  "\n"
+  "  float rim_width = max(min(radius, min(size.x, size.y) * 0.22), 8.0);\n"
+  "  float rim = 1.0 - smoothstep(0.0, rim_width, -dist);\n"
+  "  float body = smoothstep(0.04, 0.72, inside) *\n"
+  "               (1.0 - smoothstep(0.72, 1.0, inside));\n"
+  "\n"
+  "  vec2 lens_bend = compressed - base;\n"
+  "  vec2 rim_bend = -normal * rim * rim * 7.5 / size;\n"
+  "  vec2 body_bend = -normalize(base + vec2(0.0001)) * body * 0.035;\n"
+  "  vec2 bend = lens_bend * 0.75 + rim_bend + body_bend;\n"
+  "\n"
+  "  float amount = clamp(u_refraction / 24.0, 0.0, 3.3333);\n"
+  "  cogl_tex_coord.xy = clamp(uv + bend * amount,\n"
+  "                            vec2(0.001),\n"
+  "                            vec2(0.999));\n";
 
 static const gchar *glass_glsl_declarations =
-"uniform float u_saturation;                                               \n"
-"uniform float u_tint;                                                     \n"
-"uniform float u_highlight;                                                \n";
+  "uniform float u_highlight;\n";
 
 static const gchar *glass_glsl =
-"  const vec3 luma_coeff = vec3(0.299, 0.587, 0.114);                      \n"
-"  vec2 uv = cogl_tex_coord_in[0].st;                                      \n"
-"  vec2 size = max(u_size, vec2(1.0));                                     \n"
-"  vec2 half_size = max(size * 0.5, vec2(1.0));                            \n"
-"  float radius = clamp(u_corner_radius, 0.0, max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
-"  vec2 local = uv * size - half_size;                                     \n"
-"  vec2 q = abs(local) - max(half_size - vec2(radius), vec2(0.0));         \n"
-"  vec2 outside = max(q, vec2(0.0));                                       \n"
-"  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;        \n"
-"  float m = 1.0 - smoothstep(-1.0, 1.0, dist);                            \n"
-"  float min_half = max(min(half_size.x, half_size.y), 1.0);               \n"
-"  float inside = clamp(-dist / min_half, 0.0, 1.0);                       \n"
-"  float outside_len = length(outside);                                    \n"
-"  vec2 axis_normal = (q.x > q.y) ? vec2(sign(local.x), 0.0) : vec2(0.0, sign(local.y));\n"
-"  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));   \n"
-"  vec2 normal = mix(axis_normal, corner_normal, step(0.001, outside_len));\n"
-"  vec2 cp = local / half_size;                                            \n"
-"  vec2 light_dir = normalize(vec2(-0.62, -0.78));                         \n"
-"  float rim = 1.0 - smoothstep(0.0, 0.16, inside);                       \n"
-"  float rim2 = rim * rim;                                                 \n"
-"  float fresnel = pow(clamp(rim, 0.0, 1.0), 1.25);                        \n"
-"  float front = pow(max(dot(normal, -light_dir), 0.0), 8.0) * rim2;       \n"
-"  float back = pow(max(dot(-normal, -light_dir), 0.0), 4.0) * rim2 * 0.42;\n"
-"  float angle_glow = sin(atan(cp.y, cp.x) - 0.5) * 0.5 + 0.5;             \n"
-"  float glow = angle_glow * smoothstep(0.62, 0.0, inside);               \n"
-"  float inner_shadow = smoothstep(0.15, 1.0, dot(cp, vec2(0.38, 0.82))) * rim2;\n"
-"  float noise = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;\n"
-"  float luma = dot(cogl_color_out.rgb, luma_coeff);                       \n"
-"  cogl_color_out.rgb = mix(vec3(luma), cogl_color_out.rgb, u_saturation); \n"
-"  cogl_color_out.rgb = mix(cogl_color_out.rgb, vec3(luma + 0.045), u_tint);\n"
-"  cogl_color_out.rgb += vec3(noise) * 0.018 * u_highlight;               \n"
-"  cogl_color_out.rgb *= 1.0 - inner_shadow * 0.16 * u_highlight;          \n"
-"  cogl_color_out.rgb *= 1.0 + (glow * 0.16 + fresnel * 0.08) * u_highlight;\n"
-"  cogl_color_out.rgb += vec3(1.0) * (front * 0.36 + back * 0.18 + fresnel * 0.12) * u_highlight;\n"
-"  cogl_color_out.rgb *= m;                                                \n"
-"  cogl_color_out.a   *= m;                                                \n";
+  "  vec2 uv = cogl_tex_coord_in[0].st;\n"
+  "  vec2 size = max(u_size, vec2(1.0));\n"
+  "  vec2 half_size = max(size * 0.5, vec2(1.0));\n"
+  "  float radius = clamp(u_corner_radius,\n"
+  "                       0.0,\n"
+  "                       max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
+  "\n"
+  "  vec2 local = uv * size - half_size;\n"
+  "  vec2 q = abs(local) - max(half_size - vec2(radius), vec2(0.0));\n"
+  "  vec2 outside = max(q, vec2(0.0));\n"
+  "\n"
+  "  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;\n"
+  "  float mask = 1.0 - smoothstep(-1.0, 1.0, dist);\n"
+  "  float min_half = max(min(half_size.x, half_size.y), 1.0);\n"
+  "  float inside = clamp(-dist / min_half, 0.0, 1.0);\n"
+  "  float outside_len = length(outside);\n"
+  "\n"
+  "  vec2 axis_normal = (q.x > q.y)\n"
+  "    ? vec2(sign(local.x), 0.0)\n"
+  "    : vec2(0.0, sign(local.y));\n"
+  "  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));\n"
+  "  vec2 normal = mix(axis_normal,\n"
+  "                    corner_normal,\n"
+  "                    step(0.001, outside_len));\n"
+  "\n"
+  "  vec2 cp = local / half_size;\n"
+  "  vec2 light_dir = normalize(vec2(-0.62, -0.78));\n"
+  "\n"
+  "  float rim = 1.0 - smoothstep(0.0, 0.16, inside);\n"
+  "  float rim2 = rim * rim;\n"
+  "  float fresnel = pow(clamp(rim, 0.0, 1.0), 1.25);\n"
+  "  float front = pow(max(dot(normal, -light_dir), 0.0), 8.0) * rim2;\n"
+  "  float back = pow(max(dot(-normal, -light_dir), 0.0), 4.0) * rim2 * 0.42;\n"
+  "  float angle_glow = sin(atan(cp.y, cp.x) - 0.5) * 0.5 + 0.5;\n"
+  "  float glow = angle_glow * smoothstep(0.62, 0.0, inside);\n"
+  "  float inner_shadow =\n"
+  "    smoothstep(0.15, 1.0, dot(cp, vec2(0.38, 0.82))) * rim2;\n"
+  "  float noise =\n"
+  "    fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) *\n"
+  "          43758.5453) -\n"
+  "    0.5;\n"
+  "\n"
+  "  cogl_color_out.rgb += vec3(noise) * 0.018 * u_highlight;\n"
+  "  cogl_color_out.rgb *= 1.0 - inner_shadow * 0.16 * u_highlight;\n"
+  "  cogl_color_out.rgb *=\n"
+  "    1.0 + (glow * 0.16 + fresnel * 0.08) * u_highlight;\n"
+  "  cogl_color_out.rgb +=\n"
+  "    vec3(1.0) * (front * 0.36 + back * 0.18 + fresnel * 0.12) *\n"
+  "    u_highlight;\n"
+  "  cogl_color_out.rgb *= mask;\n"
+  "  cogl_color_out.a *= mask;\n";
 
 #define MIN_DOWNSCALE_SIZE 256.f
 #define MAX_RADIUS 12.f
@@ -154,10 +185,9 @@ struct _GbLiquidGlassEffect
   FramebufferData mask_fb;
   int corner_radius_uniform;
   int mask_size_uniform;
-  int saturation_uniform;
-  int tint_uniform;
   int highlight_uniform;
   int refraction_uniform;
+  int depth_uniform;
 
   GbBlurMode mode;
   float downscale_factor;
@@ -165,10 +195,9 @@ struct _GbLiquidGlassEffect
   int radius;
 
   float corner_radius;
-  float saturation;
-  float tint;
   float highlight;
   float refraction;
+  float depth;
 };
 
 G_DEFINE_TYPE (GbLiquidGlassEffect, gb_liquid_glass_effect, CLUTTER_TYPE_EFFECT)
@@ -179,29 +208,23 @@ enum {
   PROP_BRIGHTNESS,
   PROP_MODE,
   PROP_CORNER_RADIUS,
-  PROP_SATURATION,
-  PROP_TINT,
   PROP_HIGHLIGHT,
   PROP_REFRACTION,
+  PROP_DEPTH,
   N_PROPS
 };
 
 static GParamSpec *properties [N_PROPS] = { NULL, };
 
-static CoglPipeline*
+static CoglPipeline *
 create_base_pipeline (void)
 {
   static CoglPipeline *base_pipeline = NULL;
 
   if (G_UNLIKELY (base_pipeline == NULL))
     {
-       ClutterBackend *backend = clutter_get_default_backend ();
-      
-      CoglContext *ctx =
-        clutter_backend_get_cogl_context (backend);
-      
-        
-      
+      ClutterBackend *backend = clutter_get_default_backend ();
+      CoglContext *ctx = clutter_backend_get_cogl_context (backend);
 
       base_pipeline = cogl_pipeline_new (ctx);
       cogl_pipeline_set_layer_null_texture (base_pipeline, 0);
@@ -217,7 +240,7 @@ create_base_pipeline (void)
   return cogl_pipeline_copy (base_pipeline);
 }
 
-static CoglPipeline*
+static CoglPipeline *
 create_brightness_pipeline (void)
 {
   static CoglPipeline *brightness_pipeline = NULL;
@@ -238,37 +261,37 @@ create_brightness_pipeline (void)
   return cogl_pipeline_copy (brightness_pipeline);
 }
 
-static CoglPipeline*
+static CoglPipeline *
 create_mask_pipeline (void)
 {
   static CoglPipeline *mask_pipeline = NULL;
 
   if (G_UNLIKELY (mask_pipeline == NULL))
-  {
-    CoglSnippet *fragment_snippet;
-    CoglSnippet *lookup_snippet;
+    {
+      CoglSnippet *fragment_snippet;
+      CoglSnippet *lookup_snippet;
 
-    mask_pipeline = create_base_pipeline ();
+      mask_pipeline = create_base_pipeline ();
 
-    fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT_GLOBALS,
-                                         size_glsl_declarations,
+      fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT_GLOBALS,
+                                           size_glsl_declarations,
+                                           NULL);
+      cogl_pipeline_add_snippet (mask_pipeline, fragment_snippet);
+      g_object_unref (fragment_snippet);
+
+      lookup_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_TEXTURE_LOOKUP,
+                                         glass_lookup_glsl_declarations,
                                          NULL);
-    cogl_pipeline_add_snippet (mask_pipeline, fragment_snippet);
-    g_object_unref (fragment_snippet);
+      cogl_snippet_set_pre (lookup_snippet, glass_lookup_glsl);
+      cogl_pipeline_add_layer_snippet (mask_pipeline, 0, lookup_snippet);
+      g_object_unref (lookup_snippet);
 
-    lookup_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_TEXTURE_LOOKUP,
-                                       glass_lookup_glsl_declarations,
-                                       NULL);
-    cogl_snippet_set_pre (lookup_snippet, glass_lookup_glsl);
-    cogl_pipeline_add_layer_snippet (mask_pipeline, 0, lookup_snippet);
-    g_object_unref (lookup_snippet);
-
-    fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
-                                         glass_glsl_declarations,
-                                         glass_glsl);
-    cogl_pipeline_add_snippet (mask_pipeline, fragment_snippet);
-    g_object_unref (fragment_snippet);
-  }
+      fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
+                                           glass_glsl_declarations,
+                                           glass_glsl);
+      cogl_pipeline_add_snippet (mask_pipeline, fragment_snippet);
+      g_object_unref (fragment_snippet);
+    }
 
   return cogl_pipeline_copy (mask_pipeline);
 }
@@ -309,13 +332,15 @@ is_valid_mode (GbBlurMode mode)
 
 static void
 update_brightness (GbLiquidGlassEffect *self,
-                   uint8_t        paint_opacity)
+                   uint8_t              paint_opacity)
 {
   CoglColor color;
 
   cogl_color_init_from_4f (&color,
-                           paint_opacity / 255.0, paint_opacity / 255.0,
-                           paint_opacity / 255.0, paint_opacity / 255.0);
+                           paint_opacity / 255.0,
+                           paint_opacity / 255.0,
+                           paint_opacity / 255.0,
+                           paint_opacity / 255.0);
   cogl_pipeline_set_color (self->brightness_fb.pipeline, &color);
 
   if (self->brightness_uniform > -1)
@@ -328,8 +353,8 @@ update_brightness (GbLiquidGlassEffect *self,
 
 static void
 update_mask_uniforms (GbLiquidGlassEffect *self,
-                      float          width,
-                      float          height)
+                      float                width,
+                      float                height)
 {
   if (!self->mask_fb.pipeline)
     return;
@@ -340,22 +365,13 @@ update_mask_uniforms (GbLiquidGlassEffect *self,
                                   self->corner_radius);
 
   if (self->mask_size_uniform > -1)
-  {
-    const float size[2] = { width, height };
-    cogl_pipeline_set_uniform_float (self->mask_fb.pipeline,
-                                     self->mask_size_uniform,
-                                     2, 1, size);
-  }
+    {
+      const float size[2] = { width, height };
 
-  if (self->saturation_uniform > -1)
-    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
-                                  self->saturation_uniform,
-                                  self->saturation);
-
-  if (self->tint_uniform > -1)
-    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
-                                  self->tint_uniform,
-                                  self->tint);
+      cogl_pipeline_set_uniform_float (self->mask_fb.pipeline,
+                                       self->mask_size_uniform,
+                                       2, 1, size);
+    }
 
   if (self->highlight_uniform > -1)
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
@@ -366,6 +382,11 @@ update_mask_uniforms (GbLiquidGlassEffect *self,
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
                                   self->refraction_uniform,
                                   self->refraction);
+
+  if (self->depth_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->depth_uniform,
+                                  self->depth);
 }
 
 static void
@@ -440,9 +461,9 @@ update_fbo (FramebufferData *data,
 
 static gboolean
 update_actor_fbo (GbLiquidGlassEffect *self,
-                  float          width,
-                  float          height,
-                  float          downscale_factor)
+                  float                width,
+                  float                height,
+                  float                downscale_factor)
 {
   if (self->tex_width == width &&
       self->tex_height == height &&
@@ -459,9 +480,9 @@ update_actor_fbo (GbLiquidGlassEffect *self,
 
 static gboolean
 update_brightness_fbo (GbLiquidGlassEffect *self,
-                       float          width,
-                       float          height,
-                       float          downscale_factor)
+                       float                width,
+                       float                height,
+                       float                downscale_factor)
 {
   if (self->tex_width == width &&
       self->tex_height == height &&
@@ -471,15 +492,13 @@ update_brightness_fbo (GbLiquidGlassEffect *self,
       return TRUE;
     }
 
-  return update_fbo (&self->brightness_fb,
-                     width, height,
-                     downscale_factor);
+  return update_fbo (&self->brightness_fb, width, height, downscale_factor);
 }
 
 static gboolean
 update_background_fbo (GbLiquidGlassEffect *self,
-                       float          width,
-                       float          height)
+                       float                width,
+                       float                height)
 {
   if (self->tex_width == width &&
       self->tex_height == height &&
@@ -493,17 +512,17 @@ update_background_fbo (GbLiquidGlassEffect *self,
 
 static gboolean
 update_mask_fbo (GbLiquidGlassEffect *self,
-                 float          width,
-                 float          height,
-                 float          downscale_factor)
+                 float                width,
+                 float                height,
+                 float                downscale_factor)
 {
   if (self->tex_width == width &&
       self->tex_height == height &&
       self->downscale_factor == downscale_factor &&
       self->mask_fb.framebuffer)
-  {
-    return TRUE;
-  }
+    {
+      return TRUE;
+    }
 
   return update_fbo (&self->mask_fb, width, height, downscale_factor);
 }
@@ -538,7 +557,7 @@ calculate_downscale_factor (float width,
 
 static void
 gb_liquid_glass_effect_set_actor (ClutterActorMeta *meta,
-                           ClutterActor     *actor)
+                                  ClutterActor     *actor)
 {
   GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (meta);
   ClutterActorMetaClass *meta_class;
@@ -557,7 +576,7 @@ gb_liquid_glass_effect_set_actor (ClutterActorMeta *meta,
 }
 
 static void
-update_actor_box (GbLiquidGlassEffect       *self,
+update_actor_box (GbLiquidGlassEffect *self,
                   ClutterPaintContext *paint_context,
                   ClutterActorBox     *source_actor_box)
 {
@@ -606,7 +625,19 @@ update_actor_box (GbLiquidGlassEffect       *self,
 }
 
 static void
-add_blurred_pipeline (GbLiquidGlassEffect    *self,
+add_paint_rectangle (ClutterPaintNode *node,
+                     float             width,
+                     float             height)
+{
+  clutter_paint_node_add_rectangle (node,
+                                    &(ClutterActorBox) {
+                                      0.f, 0.f,
+                                      width, height,
+                                    });
+}
+
+static void
+add_blurred_pipeline (GbLiquidGlassEffect *self,
                       ClutterPaintNode *node,
                       uint8_t           paint_opacity)
 {
@@ -625,16 +656,11 @@ add_blurred_pipeline (GbLiquidGlassEffect    *self,
   clutter_paint_node_set_static_name (pipeline_node, "GbLiquidGlassEffect (final)");
   clutter_paint_node_add_child (node, pipeline_node);
 
-  clutter_paint_node_add_rectangle (pipeline_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      width,
-                                      height,
-                                    });
+  add_paint_rectangle (pipeline_node, width, height);
 }
 
 static ClutterPaintNode *
-create_blur_nodes (GbLiquidGlassEffect    *self,
+create_blur_nodes (GbLiquidGlassEffect *self,
                    ClutterPaintNode *node,
                    uint8_t           paint_opacity)
 {
@@ -651,35 +677,26 @@ create_blur_nodes (GbLiquidGlassEffect    *self,
                                                      self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (mask_node, "ShellLiquidGlassEffect (mask)");
   clutter_paint_node_add_child (node, mask_node);
-  clutter_paint_node_add_rectangle (mask_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      width, height,
-                                    });
+  add_paint_rectangle (mask_node, width, height);
 
   update_brightness (self, paint_opacity);
-  brightness_node = clutter_layer_node_new_to_framebuffer (self->brightness_fb.framebuffer,
-                                                           self->brightness_fb.pipeline);
+  brightness_node =
+    clutter_layer_node_new_to_framebuffer (self->brightness_fb.framebuffer,
+                                           self->brightness_fb.pipeline);
   clutter_paint_node_set_static_name (brightness_node, "ShellLiquidGlassEffect (brightness)");
   clutter_paint_node_add_child (mask_node, brightness_node);
-  clutter_paint_node_add_rectangle (brightness_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      cogl_texture_get_width (self->mask_fb.texture),
-                                      cogl_texture_get_height (self->mask_fb.texture),
-                                    });
+  add_paint_rectangle (brightness_node,
+                       cogl_texture_get_width (self->mask_fb.texture),
+                       cogl_texture_get_height (self->mask_fb.texture));
 
   blur_node = clutter_blur_node_new (self->tex_width / self->downscale_factor,
                                      self->tex_height / self->downscale_factor,
                                      self->radius / self->downscale_factor);
   clutter_paint_node_set_static_name (blur_node, "ShellLiquidGlassEffect (blur)");
   clutter_paint_node_add_child (brightness_node, blur_node);
-  clutter_paint_node_add_rectangle (blur_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      cogl_texture_get_width (self->mask_fb.texture),
-                                      cogl_texture_get_height (self->mask_fb.texture),
-                                    });
+  add_paint_rectangle (blur_node,
+                       cogl_texture_get_width (self->mask_fb.texture),
+                       cogl_texture_get_height (self->mask_fb.texture));
 
   self->cache_flags |= BLUR_APPLIED;
 
@@ -687,7 +704,7 @@ create_blur_nodes (GbLiquidGlassEffect    *self,
 }
 
 static void
-paint_background (GbLiquidGlassEffect      *self,
+paint_background (GbLiquidGlassEffect *self,
                   ClutterPaintNode    *node,
                   ClutterPaintContext *paint_context,
                   ClutterActorBox     *source_actor_box)
@@ -713,12 +730,9 @@ paint_background (GbLiquidGlassEffect      *self,
                                            self->background_fb.pipeline);
   clutter_paint_node_set_static_name (background_node, "GbLiquidGlassEffect (background)");
   clutter_paint_node_add_child (node, background_node);
-  clutter_paint_node_add_rectangle (background_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      self->tex_width / self->downscale_factor,
-                                      self->tex_height / self->downscale_factor,
-                                    });
+  add_paint_rectangle (background_node,
+                       self->tex_width / self->downscale_factor,
+                       self->tex_height / self->downscale_factor);
 
   /* Blit node */
   src = clutter_paint_context_get_framebuffer (paint_context);
@@ -734,7 +748,7 @@ paint_background (GbLiquidGlassEffect      *self,
 }
 
 static gboolean
-update_framebuffers (GbLiquidGlassEffect       *self,
+update_framebuffers (GbLiquidGlassEffect *self,
                      ClutterActorBox     *source_actor_box)
 {
   gboolean updated = FALSE;
@@ -767,7 +781,7 @@ update_framebuffers (GbLiquidGlassEffect       *self,
 }
 
 static void
-add_actor_node (GbLiquidGlassEffect    *self,
+add_actor_node (GbLiquidGlassEffect *self,
                 ClutterPaintNode *node,
                 int               opacity)
 {
@@ -778,7 +792,7 @@ add_actor_node (GbLiquidGlassEffect    *self,
 }
 
 static void
-paint_actor_offscreen (GbLiquidGlassEffect           *self,
+paint_actor_offscreen (GbLiquidGlassEffect     *self,
                        ClutterPaintNode        *node,
                        ClutterEffectPaintFlags  flags)
 {
@@ -794,16 +808,14 @@ paint_actor_offscreen (GbLiquidGlassEffect           *self,
       graphene_matrix_t transform;
 
       /* Layer node */
-      layer_node = clutter_layer_node_new_to_framebuffer (self->actor_fb.framebuffer,
-                                                          self->actor_fb.pipeline);
+      layer_node =
+        clutter_layer_node_new_to_framebuffer (self->actor_fb.framebuffer,
+                                               self->actor_fb.pipeline);
       clutter_paint_node_set_static_name (layer_node, "GbLiquidGlassEffect (actor offscreen)");
       clutter_paint_node_add_child (node, layer_node);
-      clutter_paint_node_add_rectangle (layer_node,
-                                        &(ClutterActorBox) {
-                                          0.f, 0.f,
-                                          self->tex_width / self->downscale_factor,
-                                          self->tex_height / self->downscale_factor,
-                                        });
+      add_paint_rectangle (layer_node,
+                           self->tex_width / self->downscale_factor,
+                           self->tex_height / self->downscale_factor);
 
       /* Transform node */
       graphene_matrix_init_scale (&transform,
@@ -827,17 +839,14 @@ paint_actor_offscreen (GbLiquidGlassEffect           *self,
       clutter_paint_node_set_static_name (pipeline_node,
                                           "GbLiquidGlassEffect (actor texture)");
       clutter_paint_node_add_child (node, pipeline_node);
-      clutter_paint_node_add_rectangle (pipeline_node,
-                                        &(ClutterActorBox) {
-                                          0.f, 0.f,
-                                          self->tex_width / self->downscale_factor,
-                                          self->tex_height / self->downscale_factor,
-                                        });
+      add_paint_rectangle (pipeline_node,
+                           self->tex_width / self->downscale_factor,
+                           self->tex_height / self->downscale_factor);
     }
 }
 
 static gboolean
-needs_repaint (GbLiquidGlassEffect         *self,
+needs_repaint (GbLiquidGlassEffect     *self,
                ClutterEffectPaintFlags  flags)
 {
   gboolean actor_cached;
@@ -862,9 +871,9 @@ needs_repaint (GbLiquidGlassEffect         *self,
 
 static void
 gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
-                              ClutterPaintNode        *node,
-                              ClutterPaintContext     *paint_context,
-                              ClutterEffectPaintFlags  flags)
+                                   ClutterPaintNode        *node,
+                                   ClutterPaintContext     *paint_context,
+                                   ClutterEffectPaintFlags  flags)
 {
   GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (effect);
   uint8_t paint_opacity;
@@ -964,9 +973,9 @@ gb_liquid_glass_effect_finalize (GObject *object)
 
 static void
 gb_liquid_glass_effect_get_property (GObject    *object,
-                                guint       prop_id,
-                                GValue     *value,
-                                GParamSpec *pspec)
+                                     guint       prop_id,
+                                     GValue     *value,
+                                     GParamSpec *pspec)
 {
   GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (object);
 
@@ -988,20 +997,16 @@ gb_liquid_glass_effect_get_property (GObject    *object,
       g_value_set_float (value, self->corner_radius);
       break;
 
-    case PROP_SATURATION:
-      g_value_set_float (value, self->saturation);
-      break;
-
-    case PROP_TINT:
-      g_value_set_float (value, self->tint);
-      break;
-
     case PROP_HIGHLIGHT:
       g_value_set_float (value, self->highlight);
       break;
 
     case PROP_REFRACTION:
       g_value_set_float (value, self->refraction);
+      break;
+
+    case PROP_DEPTH:
+      g_value_set_float (value, self->depth);
       break;
 
     default:
@@ -1011,9 +1016,9 @@ gb_liquid_glass_effect_get_property (GObject    *object,
 
 static void
 gb_liquid_glass_effect_set_property (GObject      *object,
-                                guint         prop_id,
-                                const GValue *value,
-                                GParamSpec   *pspec)
+                                     guint         prop_id,
+                                     const GValue *value,
+                                     GParamSpec   *pspec)
 {
   GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (object);
 
@@ -1035,20 +1040,16 @@ gb_liquid_glass_effect_set_property (GObject      *object,
       gb_liquid_glass_effect_set_corner_radius (self, g_value_get_float (value));
       break;
 
-    case PROP_SATURATION:
-      gb_liquid_glass_effect_set_saturation (self, g_value_get_float (value));
-      break;
-
-    case PROP_TINT:
-      gb_liquid_glass_effect_set_tint (self, g_value_get_float (value));
-      break;
-
     case PROP_HIGHLIGHT:
       gb_liquid_glass_effect_set_highlight (self, g_value_get_float (value));
       break;
 
     case PROP_REFRACTION:
       gb_liquid_glass_effect_set_refraction (self, g_value_get_float (value));
+      break;
+
+    case PROP_DEPTH:
+      gb_liquid_glass_effect_set_depth (self, g_value_get_float (value));
       break;
 
     default:
@@ -1074,43 +1075,52 @@ gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
   properties[PROP_RADIUS] =
     g_param_spec_int ("radius", NULL, NULL,
                       0, G_MAXINT, 0,
-                      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                      G_PARAM_READWRITE |
+                      G_PARAM_STATIC_STRINGS |
+                      G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_BRIGHTNESS] =
     g_param_spec_float ("brightness", NULL, NULL,
                         0.f, 1.f, 1.f,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_MODE] =
     g_param_spec_enum ("mode", NULL, NULL,
                        GB_TYPE_BLUR_MODE,
                        GB_BLUR_MODE_ACTOR,
-                       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                       G_PARAM_READWRITE |
+                       G_PARAM_STATIC_STRINGS |
+                       G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_CORNER_RADIUS] =
     g_param_spec_float ("corner-radius", NULL, NULL,
                         0.f, G_MAXFLOAT, 0.f,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
-
-  properties[PROP_SATURATION] =
-    g_param_spec_float ("saturation", NULL, NULL,
-                        0.f, 3.f, 1.05f,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
-
-  properties[PROP_TINT] =
-    g_param_spec_float ("tint", NULL, NULL,
-                        0.f, 1.f, 0.02f,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_HIGHLIGHT] =
     g_param_spec_float ("highlight", NULL, NULL,
                         0.f, 1.f, 0.35f,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_REFRACTION] =
     g_param_spec_float ("refraction", NULL, NULL,
                         0.f, 80.f, 24.f,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_DEPTH] =
+    g_param_spec_float ("depth", NULL, NULL,
+                        0.f, 24.f, 6.9f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
 
   g_object_class_install_properties (object_class, N_PROPS, properties);
 }
@@ -1122,29 +1132,28 @@ gb_liquid_glass_effect_init (GbLiquidGlassEffect *self)
   self->radius = 0;
   self->brightness = 1.f;
   self->corner_radius = 0.f;
-  self->saturation = 1.05f;
-  self->tint = 0.02f;
   self->highlight = 0.35f;
   self->refraction = 24.f;
+  self->depth = 6.9f;
 
   self->actor_fb.pipeline = create_base_pipeline ();
   self->background_fb.pipeline = create_base_pipeline ();
   self->brightness_fb.pipeline = create_brightness_pipeline ();
   self->mask_fb.pipeline = create_mask_pipeline ();
   self->brightness_uniform =
-    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "brightness");
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline,
+                                        "brightness");
   self->corner_radius_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_corner_radius");
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline,
+                                        "u_corner_radius");
   self->mask_size_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size");
-  self->saturation_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_saturation");
-  self->tint_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_tint");
   self->highlight_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_highlight");
   self->refraction_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_refraction");
+  self->depth_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_depth");
 }
 
 GbLiquidGlassEffect *
@@ -1163,7 +1172,7 @@ gb_liquid_glass_effect_get_radius (GbLiquidGlassEffect *self)
 
 void
 gb_liquid_glass_effect_set_radius (GbLiquidGlassEffect *self,
-                              int           radius)
+                                   int                  radius)
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
@@ -1191,7 +1200,7 @@ gb_liquid_glass_effect_get_brightness (GbLiquidGlassEffect *self)
 
 void
 gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
-                                  float            brightness)
+                                       float                brightness)
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
@@ -1219,7 +1228,7 @@ gb_liquid_glass_effect_get_mode (GbLiquidGlassEffect *self)
 
 void
 gb_liquid_glass_effect_set_mode (GbLiquidGlassEffect *self,
-                            GbBlurMode    mode)
+                                 GbBlurMode           mode)
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
@@ -1259,7 +1268,7 @@ gb_liquid_glass_effect_get_corner_radius (GbLiquidGlassEffect *self)
 
 void
 gb_liquid_glass_effect_set_corner_radius (GbLiquidGlassEffect *self,
-                                     float          corner_radius)
+                                          float                corner_radius)
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
@@ -1275,60 +1284,6 @@ gb_liquid_glass_effect_set_corner_radius (GbLiquidGlassEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_CORNER_RADIUS]);
-}
-
-float
-gb_liquid_glass_effect_get_saturation (GbLiquidGlassEffect *self)
-{
-  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 1.f);
-  return self->saturation;
-}
-
-void
-gb_liquid_glass_effect_set_saturation (GbLiquidGlassEffect *self,
-                                       float                saturation)
-{
-  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
-
-  saturation = sanitize_float_property (saturation, 0.f, 3.f, 1.f);
-
-  if (self->saturation == saturation)
-    return;
-
-  self->saturation = saturation;
-  self->cache_flags &= ~BLUR_APPLIED;
-
-  if (self->actor)
-    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
-
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SATURATION]);
-}
-
-float
-gb_liquid_glass_effect_get_tint (GbLiquidGlassEffect *self)
-{
-  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
-  return self->tint;
-}
-
-void
-gb_liquid_glass_effect_set_tint (GbLiquidGlassEffect *self,
-                                 float                tint)
-{
-  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
-
-  tint = sanitize_float_property (tint, 0.f, 1.f, 0.f);
-
-  if (self->tint == tint)
-    return;
-
-  self->tint = tint;
-  self->cache_flags &= ~BLUR_APPLIED;
-
-  if (self->actor)
-    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
-
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_TINT]);
 }
 
 float
@@ -1383,4 +1338,31 @@ gb_liquid_glass_effect_set_refraction (GbLiquidGlassEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_REFRACTION]);
+}
+
+float
+gb_liquid_glass_effect_get_depth (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->depth;
+}
+
+void
+gb_liquid_glass_effect_set_depth (GbLiquidGlassEffect *self,
+                                  float                depth)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  depth = sanitize_float_property (depth, 0.f, 24.f, 6.9f);
+
+  if (self->depth == depth)
+    return;
+
+  self->depth = depth;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DEPTH]);
 }
