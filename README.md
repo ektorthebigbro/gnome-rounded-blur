@@ -8,6 +8,12 @@ corner mask and different gir namespace (`Blur`).
 
 ## Build & install 
 
+### Fedora
+
+```bash
+sudo dnf install mutter-devel
+```
+
 ### From source
 
 ```bash
