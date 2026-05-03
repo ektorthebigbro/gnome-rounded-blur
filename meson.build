@@ -29,6 +29,11 @@ if not dependency('mutter-clutter-' + mutter_api_version, version: mutter_req, r
   mutter_req = '>= 49.0'
 endif
 
+if not dependency('mutter-clutter-' + mutter_api_version, version: mutter_req, required: false).found()
+  mutter_api_version = '16'
+  mutter_req = '>= 48.0'
+endif
+
 clutter_pc = 'mutter-clutter-' + mutter_api_version
 cogl_pc = 'mutter-cogl-' + mutter_api_version
 libmutter_pc = 'libmutter-' + mutter_api_version
