@@ -35,20 +35,28 @@ your GNOME Shell session is running.
 
 ## Installation
 
-### Fedora
+The repository ships `install.sh`, a cross-distro helper that wraps the Meson
+build and install steps.  It auto-detects the correct library subdirectory
+(`lib` or `lib64`) using `pkg-config` so you do not need to pass `--libdir`
+manually on most distributions.
 
-Install the build dependencies, then build and install from source:
+### Quick install (any distro)
+
+Install the build dependencies for your distribution, then run:
+
+```bash
+sudo ./install.sh
+```
+
+#### Fedora / RHEL
 
 ```bash
 sudo dnf install gcc meson ninja-build pkgconf-pkg-config \
     glib2-devel gobject-introspection-devel mutter-devel
-
-meson setup build --reconfigure --prefix=/usr --libdir=/usr/lib64
-meson compile -C build
-sudo meson install -C build
+sudo ./install.sh
 ```
 
-### Arch
+#### Arch Linux
 
 For the packaged release:
 
@@ -60,19 +68,44 @@ For this fork, build from source:
 
 ```bash
 sudo pacman -S --needed base-devel meson ninja gobject-introspection mutter
-
-meson setup build --reconfigure --prefix=/usr
-meson compile -C build
-sudo meson install -C build
+sudo ./install.sh
 ```
+
+#### Debian / Ubuntu
+
+```bash
+sudo apt install build-essential meson ninja-build pkg-config \
+    libglib2.0-dev libgirepository1.0-dev libmutter-14-dev
+sudo ./install.sh
+```
+
+#### openSUSE
+
+```bash
+sudo zypper install gcc meson ninja pkgconf \
+    glib2-devel gobject-introspection-devel mutter-devel
+sudo ./install.sh
+```
+
+### install.sh flags
+
+| Flag | Description |
+| --- | --- |
+| `--prefix PREFIX` | Installation prefix (default: `/usr`) |
+| `--libdir DIR` | Library subdirectory relative to prefix (auto-detected by default) |
+| `--build-dir NAME` | Meson build directory name (default: `build`) |
+| `--also-local` | Also install under `/usr/local` using `build-local/` — installs to both `/usr` and `/usr/local` |
+| `--local` | Install under `/usr/local` only |
+| `--no-sudo` | Run `meson install` without `sudo` |
+| `--no-ldconfig` | Skip `ldconfig` after install |
 
 ### Local Development
 
-This repository includes a helper that installs both `/usr` and `/usr/local`
-builds for local testing:
+To install to both `/usr` and `/usr/local` (matching the one-click
+`push-to-system.sh` workflow used by the Haze companion extension):
 
 ```bash
-./reinstall-local.sh
+sudo ./install.sh --also-local
 ```
 
 Restart GNOME Shell, or log out and back in, after installing or replacing the
