@@ -36,55 +36,22 @@ your GNOME Shell session is running.
 ## Installation
 
 The repository ships `install.sh`, a cross-distro helper that wraps the Meson
-build and install steps.  It auto-detects the correct library subdirectory
-(`lib` or `lib64`) using `pkg-config` so you do not need to pass `--libdir`
-manually on most distributions.
+build and install steps.  It detects your distribution, installs the required
+build dependencies automatically, and then builds and installs the library.
 
 ### Quick install (any distro)
 
-Install the build dependencies for your distribution, then run:
-
 ```bash
 sudo ./install.sh
 ```
 
-#### Fedora / RHEL
+Supported package managers: `dnf` (Fedora/RHEL/Nobara), `pacman` (Arch/Manjaro),
+`apt` (Debian/Ubuntu/Mint/Pop), `zypper` (openSUSE).
 
-```bash
-sudo dnf install gcc meson ninja-build pkgconf-pkg-config \
-    glib2-devel gobject-introspection-devel mutter-devel
-sudo ./install.sh
-```
-
-#### Arch Linux
-
-For the packaged release:
+For Arch, the upstream packaged release is also available via AUR:
 
 ```bash
 yay -S gnome-rounded-blur
-```
-
-For this fork, build from source:
-
-```bash
-sudo pacman -S --needed base-devel meson ninja gobject-introspection mutter
-sudo ./install.sh
-```
-
-#### Debian / Ubuntu
-
-```bash
-sudo apt install build-essential meson ninja-build pkg-config \
-    libglib2.0-dev libgirepository1.0-dev libmutter-14-dev
-sudo ./install.sh
-```
-
-#### openSUSE
-
-```bash
-sudo zypper install gcc meson ninja pkgconf \
-    glib2-devel gobject-introspection-devel mutter-devel
-sudo ./install.sh
 ```
 
 ### install.sh flags
@@ -96,7 +63,8 @@ sudo ./install.sh
 | `--build-dir NAME` | Meson build directory name (default: `build`) |
 | `--also-local` | Also install under `/usr/local` using `build-local/` — installs to both `/usr` and `/usr/local` |
 | `--local` | Install under `/usr/local` only |
-| `--no-sudo` | Run `meson install` without `sudo` |
+| `--skip-deps` | Skip automatic dependency installation |
+| `--no-sudo` | Run `meson install` without `sudo` (also skips dep install) |
 | `--no-ldconfig` | Skip `ldconfig` after install |
 
 ### Local Development

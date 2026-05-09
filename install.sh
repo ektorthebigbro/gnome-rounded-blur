@@ -9,6 +9,7 @@ usage() {
 Usage: install.sh [OPTIONS]
 
 Build and install gnome-rounded-blur using Meson.
+Build dependencies are installed automatically via the system package manager.
 
 Options:
   --prefix PREFIX      Installation prefix (default: /usr)
@@ -18,12 +19,13 @@ Options:
   --also-local         Also install under /usr/local using build-local/
                        (installs to both /usr and /usr/local — development workflow)
   --local              Install under /usr/local only (prefix defaults to /usr/local)
-  --no-sudo            Run meson install without sudo
+  --skip-deps          Skip automatic dependency installation
+  --no-sudo            Run meson install without sudo (deps still use sudo)
   --no-ldconfig        Skip ldconfig after install
   -h, --help           Show this help
 
 Examples:
-  # Typical system install (Fedora/Arch/Debian):
+  # Typical system install (Fedora/Arch/Debian/openSUSE):
   sudo ./install.sh
 
   # Install to both /usr and /usr/local for local development testing:
@@ -38,6 +40,9 @@ Examples:
   # Custom build directory:
   sudo ./install.sh --build-dir mybuild
 
+  # Skip dep install (deps already present):
+  sudo ./install.sh --skip-deps
+
   # Install without sudo (e.g. DESTDIR workflow or fakeroot):
   ./install.sh --no-sudo
 EOF
@@ -51,6 +56,7 @@ libdir=""
 build_dir="build"
 also_local=0
 local_only=0
+skip_deps=0
 use_sudo=1
 run_ldconfig=1
 
@@ -76,6 +82,9 @@ while (($#)); do
             ;;
         --local)
             local_only=1
+            ;;
+        --skip-deps)
+            skip_deps=1
             ;;
         --no-sudo)
             use_sudo=0
@@ -105,9 +114,89 @@ if [[ "${local_only}" == 1 ]]; then
     prefix="/usr/local"
 fi
 
+# ---------------------------------------------------------------------------
+# Dependency installation
+# ---------------------------------------------------------------------------
+
+# Find the highest-versioned package matching a pattern in apt-cache.
+apt_find_versioned_pkg() {
+    apt-cache search --names-only "$1" 2>/dev/null \
+        | awk '{print $1}' \
+        | sort -t- -k2 -rn \
+        | head -1
+}
+
+install_deps_fedora() {
+    printf '==> Installing build dependencies (dnf)\n'
+    sudo dnf install -y gcc meson ninja-build pkgconf-pkg-config \
+        glib2-devel gobject-introspection-devel mutter-devel
+}
+
+install_deps_arch() {
+    printf '==> Installing build dependencies (pacman)\n'
+    sudo pacman -S --needed --noconfirm \
+        base-devel meson ninja gobject-introspection mutter
+}
+
+install_deps_debian() {
+    printf '==> Installing build dependencies (apt)\n'
+    local mutter_pkg
+    mutter_pkg="$(apt_find_versioned_pkg 'libmutter-[0-9]+-dev')"
+    [[ -n "${mutter_pkg}" ]] || mutter_pkg="libmutter-dev"
+    sudo apt-get install -y build-essential meson ninja-build pkg-config \
+        libglib2.0-dev libgirepository1.0-dev "${mutter_pkg}"
+}
+
+install_deps_suse() {
+    printf '==> Installing build dependencies (zypper)\n'
+    sudo zypper install -y gcc meson ninja pkgconf \
+        glib2-devel gobject-introspection-devel mutter-devel
+}
+
+install_deps() {
+    if [[ ! -f /etc/os-release ]]; then
+        printf 'warning: /etc/os-release not found; skipping automatic dep install\n' >&2
+        return
+    fi
+    local id id_like
+    id="$(. /etc/os-release && printf '%s' "${ID:-}")"
+    id_like="$(. /etc/os-release && printf '%s' "${ID_LIKE:-}")"
+
+    case "${id}" in
+        fedora|rhel|centos|almalinux|rocky|nobara)
+            install_deps_fedora ;;
+        arch|manjaro|endeavouros|garuda)
+            install_deps_arch ;;
+        debian|ubuntu|linuxmint|pop)
+            install_deps_debian ;;
+        opensuse*|sles)
+            install_deps_suse ;;
+        *)
+            # Fallback: check ID_LIKE
+            case "${id_like}" in
+                *fedora*|*rhel*)   install_deps_fedora ;;
+                *arch*)            install_deps_arch ;;
+                *debian*|*ubuntu*) install_deps_debian ;;
+                *suse*)            install_deps_suse ;;
+                *)
+                    printf 'warning: unrecognised distro "%s"; skipping automatic dep install\n' \
+                        "${id}" >&2
+                    printf '         Install: gcc meson ninja pkg-config glib2-devel gobject-introspection-devel mutter-devel\n' >&2
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+# Skip dep install when --skip-deps was passed or when running without sudo
+# (--no-sudo implies the caller has an unusual environment already set up).
+if [[ "${skip_deps}" == 0 && "${use_sudo}" == 1 ]]; then
+    install_deps
+fi
+
 for cmd in meson ninja pkg-config; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
-        printf 'error: missing required command: %s\n' "${cmd}" >&2
+        printf 'error: missing required command after dep install: %s\n' "${cmd}" >&2
         exit 1
     fi
 done
