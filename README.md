@@ -48,11 +48,56 @@ sudo ./install.sh
 Supported package managers: `dnf` (Fedora/RHEL/Nobara), `pacman` (Arch/Manjaro),
 `apt` (Debian/Ubuntu/Mint/Pop), `zypper` (openSUSE).
 
-For Arch, the upstream packaged release is also available via AUR:
+If your distro is not recognised, or you prefer to manage dependencies
+yourself, install them manually then pass `--skip-deps`:
+
+#### Fedora / RHEL / Nobara
 
 ```bash
-yay -S gnome-rounded-blur
+sudo dnf install gcc meson ninja-build pkgconf-pkg-config \
+    glib2-devel gobject-introspection-devel mutter-devel
+sudo ./install.sh --skip-deps
 ```
+
+#### Arch / Manjaro
+
+```bash
+sudo pacman -S --needed base-devel meson ninja gobject-introspection mutter
+sudo ./install.sh --skip-deps
+```
+
+#### Debian / Ubuntu / Mint / Pop
+
+Replace `<N>` with the mutter version that matches your GNOME release
+(e.g. `14` for GNOME 46, `16` for GNOME 48):
+
+```bash
+sudo apt install build-essential meson ninja-build pkg-config \
+    libglib2.0-dev libgirepository1.0-dev libmutter-<N>-dev
+sudo ./install.sh --skip-deps
+```
+
+#### openSUSE
+
+```bash
+sudo zypper install gcc meson ninja pkgconf \
+    glib2-devel gobject-introspection-devel mutter-devel
+sudo ./install.sh --skip-deps
+```
+
+### Manual build (no script)
+
+If `install.sh` does not work, build with Meson directly:
+
+```bash
+meson setup build --prefix=/usr
+meson compile -C build
+sudo meson install -C build
+sudo ldconfig
+```
+
+On Fedora and other multilib systems replace `--prefix=/usr` with
+`--prefix=/usr --libdir=lib64` if your system libraries live under `/usr/lib64`.
 
 ### install.sh flags
 
