@@ -1538,8 +1538,6 @@ gb_liquid_glass_effect_set_highlight (GbLiquidGlassEffect *self,
 
   highlight = sanitize_float_property (highlight, 0.f, 1.f, 0.f);
   gb_liquid_glass_effect_set_glow_weight (self, highlight * 42.85714f);
-
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_HIGHLIGHT]);
 }
 
 float
@@ -1567,6 +1565,7 @@ gb_liquid_glass_effect_set_glow_weight (GbLiquidGlassEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_GLOW_WEIGHT]);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_HIGHLIGHT]);
 }
 
 float
