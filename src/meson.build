@@ -2,11 +2,13 @@
 lib_sources = [
   'rounded-blur-effect.c',
   'liquid-glass-effect.c',
+  'adaptive-brightness.c',
   'rounded-blur-mode.c',
 ]
 
 # Library headers
 lib_headers = [
+  'adaptive-brightness.h',
   'rounded-blur-effect.h',
   'liquid-glass-effect.h',
 ]

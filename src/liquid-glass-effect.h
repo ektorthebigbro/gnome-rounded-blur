@@ -21,6 +21,7 @@
 #pragma once
 
 #include "rounded-blur-effect.h"
+#include "adaptive-brightness.h"
 
 G_BEGIN_DECLS
 
@@ -43,6 +44,22 @@ float gb_liquid_glass_effect_get_brightness (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
                                             float                brightness);
 
+gboolean gb_liquid_glass_effect_get_adaptive_brightness (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_adaptive_brightness (GbLiquidGlassEffect *self,
+                                                     gboolean             adaptive_brightness);
+
+float gb_liquid_glass_effect_get_adaptive_brightness_strength (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_adaptive_brightness_strength (GbLiquidGlassEffect *self,
+                                                              float                strength);
+
+float gb_liquid_glass_effect_get_adaptive_brightness_minimum (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_adaptive_brightness_minimum (GbLiquidGlassEffect *self,
+                                                             float                minimum);
+
+GbAdaptiveBrightnessQuality gb_liquid_glass_effect_get_adaptive_brightness_quality (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_adaptive_brightness_quality (GbLiquidGlassEffect         *self,
+                                                             GbAdaptiveBrightnessQuality  quality);
+
 GbBlurMode gb_liquid_glass_effect_get_mode (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_mode (GbLiquidGlassEffect *self,
                                       GbBlurMode           mode);
@@ -54,6 +71,22 @@ void gb_liquid_glass_effect_set_corner_radius (GbLiquidGlassEffect *self,
 float gb_liquid_glass_effect_get_highlight (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_highlight (GbLiquidGlassEffect *self,
                                            float                highlight);
+
+float gb_liquid_glass_effect_get_glow_weight (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_glow_weight (GbLiquidGlassEffect *self,
+                                             float                glow_weight);
+
+float gb_liquid_glass_effect_get_glow_bias (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_glow_bias (GbLiquidGlassEffect *self,
+                                           float                glow_bias);
+
+float gb_liquid_glass_effect_get_glow_bevel (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_glow_bevel (GbLiquidGlassEffect *self,
+                                            float                glow_bevel);
+
+float gb_liquid_glass_effect_get_glow_smooth (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_glow_smooth (GbLiquidGlassEffect *self,
+                                             float                glow_smooth);
 
 float gb_liquid_glass_effect_get_refraction (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_refraction (GbLiquidGlassEffect *self,

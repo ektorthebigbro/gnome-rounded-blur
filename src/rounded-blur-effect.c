@@ -27,10 +27,31 @@
 //#include "bsm-enum-types.h"
 
 static const gchar *brightness_glsl_declarations =
-"uniform float brightness;                                                 \n";
+"uniform float brightness;                                                 \n"
+"uniform float u_adaptive_brightness;                                      \n"
+"uniform float u_adaptive_brightness_strength;                             \n"
+"uniform float u_adaptive_brightness_minimum;                              \n";
 
 static const gchar *brightness_glsl =
-"  cogl_color_out.rgb *= brightness;                                       \n";
+"  float adaptive_strength = clamp(u_adaptive_brightness_strength, 0.0, 1.0);\n"
+"  float adaptive_brightness = brightness;                                 \n"
+"  if (u_adaptive_brightness > 0.5 && adaptive_strength > 0.0)             \n"
+"    {                                                                     \n"
+"      const float fixed_start = 0.38;                                     \n"
+"      const float ceiling = 0.98;                                         \n"
+"      const float exponent = 2.6;                                         \n"
+"      float luma = dot(cogl_color_out.rgb, vec3(0.2126, 0.7152, 0.0722)); \n"
+"      float threshold = fixed_start +                                    \n"
+"        (ceiling - fixed_start) * (1.0 - adaptive_strength) * 0.6;        \n"
+"      float normalized = clamp((luma - threshold) /                       \n"
+"                               max(ceiling - threshold, 0.001), 0.0, 1.0);\n"
+"      float eased = pow(normalized, exponent);                            \n"
+"      float floor_brightness = clamp(u_adaptive_brightness_minimum,       \n"
+"                                     0.0, brightness);                    \n"
+"      adaptive_brightness = brightness -                                  \n"
+"        (brightness - floor_brightness) * adaptive_strength * eased;      \n"
+"    }                                                                     \n"
+"  cogl_color_out.rgb *= adaptive_brightness;                              \n";
 
 static const gchar *mask_glsl_declarations =
 "uniform float u_corner_radius;                                            \n"
@@ -77,6 +98,9 @@ struct _GbBlurEffect
   FramebufferData background_fb;
   FramebufferData brightness_fb;
   int brightness_uniform;
+  int adaptive_brightness_uniform;
+  int adaptive_brightness_strength_uniform;
+  int adaptive_brightness_minimum_uniform;
 
   FramebufferData mask_fb;
   int corner_radius_uniform;
@@ -85,6 +109,9 @@ struct _GbBlurEffect
   GbBlurMode mode;
   float downscale_factor;
   float brightness;
+  gboolean adaptive_brightness;
+  float adaptive_brightness_strength;
+  float adaptive_brightness_minimum;
   int radius;
 
   float corner_radius;
@@ -96,6 +123,9 @@ enum {
   PROP_0,
   PROP_RADIUS,
   PROP_BRIGHTNESS,
+  PROP_ADAPTIVE_BRIGHTNESS,
+  PROP_ADAPTIVE_BRIGHTNESS_STRENGTH,
+  PROP_ADAPTIVE_BRIGHTNESS_MINIMUM,
   PROP_MODE,
   PROP_CORNER_RADIUS,
   N_PROPS
@@ -223,6 +253,18 @@ update_brightness (GbBlurEffect *self,
                                     self->brightness_uniform,
                                     self->brightness);
     }
+  if (self->adaptive_brightness_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->brightness_fb.pipeline,
+                                  self->adaptive_brightness_uniform,
+                                  self->adaptive_brightness ? 1.f : 0.f);
+  if (self->adaptive_brightness_strength_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->brightness_fb.pipeline,
+                                  self->adaptive_brightness_strength_uniform,
+                                  self->adaptive_brightness_strength);
+  if (self->adaptive_brightness_minimum_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->brightness_fb.pipeline,
+                                  self->adaptive_brightness_minimum_uniform,
+                                  self->adaptive_brightness_minimum);
 }
 
 static void
@@ -859,6 +901,18 @@ gb_blur_effect_get_property (GObject    *object,
       g_value_set_float (value, self->brightness);
       break;
 
+    case PROP_ADAPTIVE_BRIGHTNESS:
+      g_value_set_boolean (value, self->adaptive_brightness);
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_STRENGTH:
+      g_value_set_float (value, self->adaptive_brightness_strength);
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_MINIMUM:
+      g_value_set_float (value, self->adaptive_brightness_minimum);
+      break;
+
     case PROP_MODE:
       g_value_set_enum (value, self->mode);
       break;
@@ -888,6 +942,18 @@ gb_blur_effect_set_property (GObject      *object,
 
     case PROP_BRIGHTNESS:
       gb_blur_effect_set_brightness (self, g_value_get_float (value));
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS:
+      gb_blur_effect_set_adaptive_brightness (self, g_value_get_boolean (value));
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_STRENGTH:
+      gb_blur_effect_set_adaptive_brightness_strength (self, g_value_get_float (value));
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_MINIMUM:
+      gb_blur_effect_set_adaptive_brightness_minimum (self, g_value_get_float (value));
       break;
 
     case PROP_MODE:
@@ -928,6 +994,21 @@ gb_blur_effect_class_init (GbBlurEffectClass *klass)
                         0.f, 1.f, 1.f,
                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
 
+  properties[PROP_ADAPTIVE_BRIGHTNESS] =
+    g_param_spec_boolean ("adaptive-brightness", NULL, NULL,
+                          FALSE,
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_ADAPTIVE_BRIGHTNESS_STRENGTH] =
+    g_param_spec_float ("adaptive-brightness-strength", NULL, NULL,
+                        0.f, 1.f, 0.75f,
+                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_ADAPTIVE_BRIGHTNESS_MINIMUM] =
+    g_param_spec_float ("adaptive-brightness-minimum", NULL, NULL,
+                        0.f, 1.f, 0.28f,
+                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
   properties[PROP_MODE] =
     g_param_spec_enum ("mode", NULL, NULL,
                        GB_TYPE_BLUR_MODE,
@@ -948,6 +1029,9 @@ gb_blur_effect_init (GbBlurEffect *self)
   self->mode = GB_BLUR_MODE_ACTOR;
   self->radius = 0;
   self->brightness = 1.f;
+  self->adaptive_brightness = FALSE;
+  self->adaptive_brightness_strength = 0.75f;
+  self->adaptive_brightness_minimum = 0.28f;
   self->corner_radius = 0.f;
 
   self->actor_fb.pipeline = create_base_pipeline ();
@@ -956,6 +1040,12 @@ gb_blur_effect_init (GbBlurEffect *self)
   self->mask_fb.pipeline = create_mask_pipeline ();
   self->brightness_uniform =
     cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "brightness");
+  self->adaptive_brightness_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness");
+  self->adaptive_brightness_strength_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness_strength");
+  self->adaptive_brightness_minimum_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness_minimum");
   self->corner_radius_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_corner_radius");
   self->mask_size_uniform =
@@ -1022,6 +1112,90 @@ gb_blur_effect_set_brightness (GbBlurEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BRIGHTNESS]);
+}
+
+gboolean
+gb_blur_effect_get_adaptive_brightness (GbBlurEffect *self)
+{
+  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), FALSE);
+
+  return self->adaptive_brightness;
+}
+
+void
+gb_blur_effect_set_adaptive_brightness (GbBlurEffect *self,
+                                        gboolean      adaptive_brightness)
+{
+  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+
+  adaptive_brightness = !!adaptive_brightness;
+
+  if (self->adaptive_brightness == adaptive_brightness)
+    return;
+
+  self->adaptive_brightness = adaptive_brightness;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS]);
+}
+
+float
+gb_blur_effect_get_adaptive_brightness_strength (GbBlurEffect *self)
+{
+  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), 0.f);
+
+  return self->adaptive_brightness_strength;
+}
+
+void
+gb_blur_effect_set_adaptive_brightness_strength (GbBlurEffect *self,
+                                                 float         strength)
+{
+  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+
+  strength = sanitize_float_property (strength, 0.f, 1.f, 0.75f);
+
+  if (self->adaptive_brightness_strength == strength)
+    return;
+
+  self->adaptive_brightness_strength = strength;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS_STRENGTH]);
+}
+
+float
+gb_blur_effect_get_adaptive_brightness_minimum (GbBlurEffect *self)
+{
+  g_return_val_if_fail (GB_IS_BLUR_EFFECT (self), 0.f);
+
+  return self->adaptive_brightness_minimum;
+}
+
+void
+gb_blur_effect_set_adaptive_brightness_minimum (GbBlurEffect *self,
+                                                float         minimum)
+{
+  g_return_if_fail (GB_IS_BLUR_EFFECT (self));
+
+  minimum = sanitize_float_property (minimum, 0.f, 1.f, 0.28f);
+
+  if (self->adaptive_brightness_minimum == minimum)
+    return;
+
+  self->adaptive_brightness_minimum = minimum;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS_MINIMUM]);
 }
 
 GbBlurMode

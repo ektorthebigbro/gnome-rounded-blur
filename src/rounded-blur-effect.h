@@ -47,6 +47,18 @@ float gb_blur_effect_get_brightness (GbBlurEffect *self);
 void gb_blur_effect_set_brightness (GbBlurEffect *self,
                                        float          brightness);
 
+gboolean gb_blur_effect_get_adaptive_brightness (GbBlurEffect *self);
+void gb_blur_effect_set_adaptive_brightness (GbBlurEffect *self,
+                                             gboolean      adaptive_brightness);
+
+float gb_blur_effect_get_adaptive_brightness_strength (GbBlurEffect *self);
+void gb_blur_effect_set_adaptive_brightness_strength (GbBlurEffect *self,
+                                                      float         strength);
+
+float gb_blur_effect_get_adaptive_brightness_minimum (GbBlurEffect *self);
+void gb_blur_effect_set_adaptive_brightness_minimum (GbBlurEffect *self,
+                                                     float         minimum);
+
 GbBlurMode gb_blur_effect_get_mode (GbBlurEffect *self);
 void gb_blur_effect_set_mode (GbBlurEffect *self,
                                  GbBlurMode    mode);

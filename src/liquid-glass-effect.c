@@ -21,14 +21,9 @@
 #include <mtk/mtk.h>
 
 #include "liquid-glass-effect.h"
+#include "adaptive-brightness.h"
 
 #include <math.h>
-
-static const gchar *brightness_glsl_declarations =
-  "uniform float brightness;\n";
-
-static const gchar *brightness_glsl =
-  "  cogl_color_out.rgb *= brightness;\n";
 
 static const gchar *size_glsl_declarations =
   "uniform vec2 u_size;\n"
@@ -46,55 +41,33 @@ static const gchar *glass_lookup_glsl =
   "                       0.0,\n"
   "                       max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
   "\n"
-  "  const float FIGMA_A = 0.7;\n"
-  "  const float FIGMA_B = 2.3;\n"
-  "  const float FIGMA_C = 5.2;\n"
-  "  const float FIGMA_F_POWER = 3.0;\n"
+  "  const float GLASS_A = 0.7;\n"
+  "  const float GLASS_B = 2.3;\n"
+  "  const float GLASS_C = 5.2;\n"
+  "  const float M_E = 2.718281828459045;\n"
   "\n"
-  "  vec2 local = uv * size - half_size;\n"
-  "  vec2 box = max(half_size - vec2(radius), vec2(0.0));\n"
-  "  vec2 q = abs(local) - box;\n"
-  "  vec2 outside = max(q, vec2(0.0));\n"
+  "  vec2 pos = uv * size;\n"
+  "  vec2 local = (pos - half_size) / half_size;\n"
+  "  vec2 quad = abs(pos - half_size) - half_size + radius;\n"
+  "  float dist = length(max(quad, vec2(0.0))) - radius;\n"
   "\n"
-  "  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;\n"
-  "  float outside_len = length(outside);\n"
+  "  float depth = clamp(u_depth / 100.0, 0.0, 1.0);\n"
+  "  float d = mix(0.05, 0.3, 1.0 - depth);\n"
+  "  float power = clamp(u_refraction / 100.0, 0.0, 1.5);\n"
+  "  float lens = 1.0 - GLASS_B * pow(GLASS_C * M_E,\n"
+  "                                   -d * -dist - GLASS_A);\n"
+  "  vec2 refracted = local * pow(max(lens, 0.0001), power);\n"
+  "  vec2 refracted_uv = (refracted * half_size + half_size) / size;\n"
   "\n"
-  "  vec2 axis_normal = (q.x > q.y)\n"
-  "    ? vec2(sign(local.x), 0.0)\n"
-  "    : vec2(0.0, sign(local.y));\n"
-  "  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));\n"
-  "  vec2 normal = mix(axis_normal,\n"
-  "                    corner_normal,\n"
-  "                    step(0.001, outside_len));\n"
-  "\n"
-  "  float min_half = max(min(half_size.x, half_size.y), 1.0);\n"
-  "  float inside = clamp(-dist / min_half, 0.0, 1.0);\n"
-  "  float lens = clamp(1.0 -\n"
-  "                     FIGMA_B * exp(-u_depth * inside - FIGMA_A) *\n"
-  "                     FIGMA_C,\n"
-  "                     0.0,\n"
-  "                     1.0);\n"
-  "\n"
-  "  vec2 base = local / size;\n"
-  "  vec2 compressed = base * pow(lens, FIGMA_F_POWER);\n"
-  "\n"
-  "  float rim_width = max(min(radius, min(size.x, size.y) * 0.22), 8.0);\n"
-  "  float rim = 1.0 - smoothstep(0.0, rim_width, -dist);\n"
-  "  float body = smoothstep(0.04, 0.72, inside) *\n"
-  "               (1.0 - smoothstep(0.72, 1.0, inside));\n"
-  "\n"
-  "  vec2 lens_bend = compressed - base;\n"
-  "  vec2 rim_bend = -normal * rim * rim * 7.5 / size;\n"
-  "  vec2 body_bend = -normalize(base + vec2(0.0001)) * body * 0.035;\n"
-  "  vec2 bend = lens_bend * 0.75 + rim_bend + body_bend;\n"
-  "\n"
-  "  float amount = clamp(u_refraction / 24.0, 0.0, 3.3333);\n"
-  "  cogl_tex_coord.xy = clamp(uv + bend * amount,\n"
-  "                            vec2(0.001),\n"
-  "                            vec2(0.999));\n";
+  "  cogl_tex_coord.xy = clamp(refracted_uv,\n"
+  "                            vec2(3.0) / size,\n"
+  "                            vec2(1.0) - vec2(3.0) / size);\n";
 
 static const gchar *glass_glsl_declarations =
-  "uniform float u_highlight;\n";
+  "uniform float u_glow_weight;\n"
+  "uniform float u_glow_bias;\n"
+  "uniform float u_glow_bevel;\n"
+  "uniform float u_glow_smooth;\n";
 
 static const gchar *glass_glsl =
   "  vec2 uv = cogl_tex_coord_in[0].st;\n"
@@ -104,48 +77,20 @@ static const gchar *glass_glsl =
   "                       0.0,\n"
   "                       max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
   "\n"
-  "  vec2 local = uv * size - half_size;\n"
-  "  vec2 q = abs(local) - max(half_size - vec2(radius), vec2(0.0));\n"
-  "  vec2 outside = max(q, vec2(0.0));\n"
+  "  vec2 pos = uv * size;\n"
+  "  vec2 local = (pos - half_size) / half_size;\n"
+  "  vec2 quad = abs(pos - half_size) - half_size + radius;\n"
+  "  float dist = length(max(quad, vec2(0.0))) - radius;\n"
+  "  float mask = 1.0 - smoothstep(0.0, 1.0, dist);\n"
   "\n"
-  "  float dist = length(outside) + min(max(q.x, q.y), 0.0) - radius;\n"
-  "  float mask = 1.0 - smoothstep(-1.0, 1.0, dist);\n"
-  "  float min_half = max(min(half_size.x, half_size.y), 1.0);\n"
-  "  float inside = clamp(-dist / min_half, 0.0, 1.0);\n"
-  "  float outside_len = length(outside);\n"
+  "  float angle_glow = sin(atan(local.y, local.x) - 0.5);\n"
+  "  float edge_glow = smoothstep(max(u_glow_bevel, 1.0),\n"
+  "                               -u_glow_smooth,\n"
+  "                               -dist);\n"
+  "  float glow_mul = angle_glow * u_glow_weight * edge_glow +\n"
+  "                   1.0 + u_glow_bias;\n"
   "\n"
-  "  vec2 axis_normal = (q.x > q.y)\n"
-  "    ? vec2(sign(local.x), 0.0)\n"
-  "    : vec2(0.0, sign(local.y));\n"
-  "  vec2 corner_normal = normalize(outside * sign(local) + vec2(0.0001));\n"
-  "  vec2 normal = mix(axis_normal,\n"
-  "                    corner_normal,\n"
-  "                    step(0.001, outside_len));\n"
-  "\n"
-  "  vec2 cp = local / half_size;\n"
-  "  vec2 light_dir = normalize(vec2(-0.62, -0.78));\n"
-  "\n"
-  "  float rim = 1.0 - smoothstep(0.0, 0.16, inside);\n"
-  "  float rim2 = rim * rim;\n"
-  "  float fresnel = pow(clamp(rim, 0.0, 1.0), 1.25);\n"
-  "  float front = pow(max(dot(normal, -light_dir), 0.0), 8.0) * rim2;\n"
-  "  float back = pow(max(dot(-normal, -light_dir), 0.0), 4.0) * rim2 * 0.42;\n"
-  "  float angle_glow = sin(atan(cp.y, cp.x) - 0.5) * 0.5 + 0.5;\n"
-  "  float glow = angle_glow * smoothstep(0.62, 0.0, inside);\n"
-  "  float inner_shadow =\n"
-  "    smoothstep(0.15, 1.0, dot(cp, vec2(0.38, 0.82))) * rim2;\n"
-  "  float noise =\n"
-  "    fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) *\n"
-  "          43758.5453) -\n"
-  "    0.5;\n"
-  "\n"
-  "  cogl_color_out.rgb += vec3(noise) * 0.018 * u_highlight;\n"
-  "  cogl_color_out.rgb *= 1.0 - inner_shadow * 0.16 * u_highlight;\n"
-  "  cogl_color_out.rgb *=\n"
-  "    1.0 + (glow * 0.16 + fresnel * 0.08) * u_highlight;\n"
-  "  cogl_color_out.rgb +=\n"
-  "    vec3(1.0) * (front * 0.36 + back * 0.18 + fresnel * 0.12) *\n"
-  "    u_highlight;\n"
+  "  cogl_color_out.rgb *= glow_mul;\n"
   "  cogl_color_out.rgb *= mask;\n"
   "  cogl_color_out.a *= mask;\n";
 
@@ -181,21 +126,35 @@ struct _GbLiquidGlassEffect
   FramebufferData background_fb;
   FramebufferData brightness_fb;
   int brightness_uniform;
+  int adaptive_brightness_uniform;
+  int adaptive_brightness_strength_uniform;
+  int adaptive_brightness_minimum_uniform;
+  int adaptive_brightness_tex_size_uniform;
 
   FramebufferData mask_fb;
   int corner_radius_uniform;
   int mask_size_uniform;
-  int highlight_uniform;
+  int glow_weight_uniform;
+  int glow_bias_uniform;
+  int glow_bevel_uniform;
+  int glow_smooth_uniform;
   int refraction_uniform;
   int depth_uniform;
 
   GbBlurMode mode;
   float downscale_factor;
   float brightness;
+  gboolean adaptive_brightness;
+  float adaptive_brightness_strength;
+  float adaptive_brightness_minimum;
+  GbAdaptiveBrightnessQuality adaptive_brightness_quality;
   int radius;
 
   float corner_radius;
-  float highlight;
+  float glow_weight;
+  float glow_bias;
+  float glow_bevel;
+  float glow_smooth;
   float refraction;
   float depth;
 };
@@ -206,9 +165,17 @@ enum {
   PROP_0,
   PROP_RADIUS,
   PROP_BRIGHTNESS,
+  PROP_ADAPTIVE_BRIGHTNESS,
+  PROP_ADAPTIVE_BRIGHTNESS_STRENGTH,
+  PROP_ADAPTIVE_BRIGHTNESS_MINIMUM,
+  PROP_ADAPTIVE_BRIGHTNESS_QUALITY,
   PROP_MODE,
   PROP_CORNER_RADIUS,
   PROP_HIGHLIGHT,
+  PROP_GLOW_WEIGHT,
+  PROP_GLOW_BIAS,
+  PROP_GLOW_BEVEL,
+  PROP_GLOW_SMOOTH,
   PROP_REFRACTION,
   PROP_DEPTH,
   N_PROPS
@@ -240,25 +207,29 @@ create_base_pipeline (void)
   return cogl_pipeline_copy (base_pipeline);
 }
 
-static CoglPipeline *
-create_brightness_pipeline (void)
+static void
+rebuild_brightness_pipeline (GbLiquidGlassEffect *self)
 {
-  static CoglPipeline *brightness_pipeline = NULL;
+  g_autoptr (CoglPipeline) base = create_base_pipeline ();
 
-  if (G_UNLIKELY (brightness_pipeline == NULL))
-    {
-      CoglSnippet *snippet;
+  g_clear_object (&self->brightness_fb.pipeline);
+  self->brightness_fb.pipeline =
+    gb_adaptive_brightness_create_pipeline (base, self->adaptive_brightness_quality);
 
-      brightness_pipeline = create_base_pipeline ();
-
-      snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
-                                  brightness_glsl_declarations,
-                                  brightness_glsl);
-      cogl_pipeline_add_snippet (brightness_pipeline, snippet);
-      g_object_unref (snippet);
-    }
-
-  return cogl_pipeline_copy (brightness_pipeline);
+  self->brightness_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "brightness");
+  self->adaptive_brightness_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline,
+                                        "u_adaptive_brightness");
+  self->adaptive_brightness_strength_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline,
+                                        "u_adaptive_brightness_strength");
+  self->adaptive_brightness_minimum_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline,
+                                        "u_adaptive_brightness_minimum");
+  self->adaptive_brightness_tex_size_uniform =
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline,
+                                        "u_ab_tex_size");
 }
 
 static CoglPipeline *
@@ -334,21 +305,19 @@ static void
 update_brightness (GbLiquidGlassEffect *self,
                    uint8_t              paint_opacity)
 {
-  CoglColor color;
-
-  cogl_color_init_from_4f (&color,
-                           paint_opacity / 255.0,
-                           paint_opacity / 255.0,
-                           paint_opacity / 255.0,
-                           paint_opacity / 255.0);
-  cogl_pipeline_set_color (self->brightness_fb.pipeline, &color);
-
-  if (self->brightness_uniform > -1)
-    {
-      cogl_pipeline_set_uniform_1f (self->brightness_fb.pipeline,
-                                    self->brightness_uniform,
-                                    self->brightness);
-    }
+  gb_adaptive_brightness_apply (self->brightness_fb.pipeline,
+                                self->brightness_uniform,
+                                self->adaptive_brightness_uniform,
+                                self->adaptive_brightness_strength_uniform,
+                                self->adaptive_brightness_minimum_uniform,
+                                self->adaptive_brightness_tex_size_uniform,
+                                paint_opacity,
+                                self->brightness,
+                                self->adaptive_brightness,
+                                self->adaptive_brightness_strength,
+                                self->adaptive_brightness_minimum,
+                                self->tex_width / self->downscale_factor,
+                                self->tex_height / self->downscale_factor);
 }
 
 static void
@@ -373,10 +342,25 @@ update_mask_uniforms (GbLiquidGlassEffect *self,
                                        2, 1, size);
     }
 
-  if (self->highlight_uniform > -1)
+  if (self->glow_weight_uniform > -1)
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
-                                  self->highlight_uniform,
-                                  self->highlight);
+                                  self->glow_weight_uniform,
+                                  self->glow_weight / 10.f);
+
+  if (self->glow_bias_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->glow_bias_uniform,
+                                  self->glow_bias / 10.f);
+
+  if (self->glow_bevel_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->glow_bevel_uniform,
+                                  self->glow_bevel);
+
+  if (self->glow_smooth_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->glow_smooth_uniform,
+                                  self->glow_smooth);
 
   if (self->refraction_uniform > -1)
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
@@ -989,6 +973,22 @@ gb_liquid_glass_effect_get_property (GObject    *object,
       g_value_set_float (value, self->brightness);
       break;
 
+    case PROP_ADAPTIVE_BRIGHTNESS:
+      g_value_set_boolean (value, self->adaptive_brightness);
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_STRENGTH:
+      g_value_set_float (value, self->adaptive_brightness_strength);
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_MINIMUM:
+      g_value_set_float (value, self->adaptive_brightness_minimum);
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_QUALITY:
+      g_value_set_int (value, (int) self->adaptive_brightness_quality);
+      break;
+
     case PROP_MODE:
       g_value_set_enum (value, self->mode);
       break;
@@ -998,7 +998,23 @@ gb_liquid_glass_effect_get_property (GObject    *object,
       break;
 
     case PROP_HIGHLIGHT:
-      g_value_set_float (value, self->highlight);
+      g_value_set_float (value, self->glow_weight / 42.85714f);
+      break;
+
+    case PROP_GLOW_WEIGHT:
+      g_value_set_float (value, self->glow_weight);
+      break;
+
+    case PROP_GLOW_BIAS:
+      g_value_set_float (value, self->glow_bias);
+      break;
+
+    case PROP_GLOW_BEVEL:
+      g_value_set_float (value, self->glow_bevel);
+      break;
+
+    case PROP_GLOW_SMOOTH:
+      g_value_set_float (value, self->glow_smooth);
       break;
 
     case PROP_REFRACTION:
@@ -1032,6 +1048,23 @@ gb_liquid_glass_effect_set_property (GObject      *object,
       gb_liquid_glass_effect_set_brightness (self, g_value_get_float (value));
       break;
 
+    case PROP_ADAPTIVE_BRIGHTNESS:
+      gb_liquid_glass_effect_set_adaptive_brightness (self, g_value_get_boolean (value));
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_STRENGTH:
+      gb_liquid_glass_effect_set_adaptive_brightness_strength (self, g_value_get_float (value));
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_MINIMUM:
+      gb_liquid_glass_effect_set_adaptive_brightness_minimum (self, g_value_get_float (value));
+      break;
+
+    case PROP_ADAPTIVE_BRIGHTNESS_QUALITY:
+      gb_liquid_glass_effect_set_adaptive_brightness_quality (
+        self, (GbAdaptiveBrightnessQuality) g_value_get_int (value));
+      break;
+
     case PROP_MODE:
       gb_liquid_glass_effect_set_mode (self, g_value_get_enum (value));
       break;
@@ -1042,6 +1075,22 @@ gb_liquid_glass_effect_set_property (GObject      *object,
 
     case PROP_HIGHLIGHT:
       gb_liquid_glass_effect_set_highlight (self, g_value_get_float (value));
+      break;
+
+    case PROP_GLOW_WEIGHT:
+      gb_liquid_glass_effect_set_glow_weight (self, g_value_get_float (value));
+      break;
+
+    case PROP_GLOW_BIAS:
+      gb_liquid_glass_effect_set_glow_bias (self, g_value_get_float (value));
+      break;
+
+    case PROP_GLOW_BEVEL:
+      gb_liquid_glass_effect_set_glow_bevel (self, g_value_get_float (value));
+      break;
+
+    case PROP_GLOW_SMOOTH:
+      gb_liquid_glass_effect_set_glow_smooth (self, g_value_get_float (value));
       break;
 
     case PROP_REFRACTION:
@@ -1086,6 +1135,36 @@ gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
                         G_PARAM_STATIC_STRINGS |
                         G_PARAM_EXPLICIT_NOTIFY);
 
+  properties[PROP_ADAPTIVE_BRIGHTNESS] =
+    g_param_spec_boolean ("adaptive-brightness", NULL, NULL,
+                          FALSE,
+                          G_PARAM_READWRITE |
+                          G_PARAM_STATIC_STRINGS |
+                          G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_ADAPTIVE_BRIGHTNESS_STRENGTH] =
+    g_param_spec_float ("adaptive-brightness-strength", NULL, NULL,
+                        0.f, 1.f, 0.75f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_ADAPTIVE_BRIGHTNESS_MINIMUM] =
+    g_param_spec_float ("adaptive-brightness-minimum", NULL, NULL,
+                        0.f, 1.f, 0.28f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_ADAPTIVE_BRIGHTNESS_QUALITY] =
+    g_param_spec_int ("adaptive-brightness-quality", NULL, NULL,
+                      GB_ADAPTIVE_BRIGHTNESS_QUALITY_PERFORMANCE,
+                      GB_ADAPTIVE_BRIGHTNESS_QUALITY_QUALITY,
+                      GB_ADAPTIVE_BRIGHTNESS_QUALITY_BALANCED,
+                      G_PARAM_READWRITE |
+                      G_PARAM_STATIC_STRINGS |
+                      G_PARAM_EXPLICIT_NOTIFY);
+
   properties[PROP_MODE] =
     g_param_spec_enum ("mode", NULL, NULL,
                        GB_TYPE_BLUR_MODE,
@@ -1108,16 +1187,44 @@ gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
                         G_PARAM_STATIC_STRINGS |
                         G_PARAM_EXPLICIT_NOTIFY);
 
+  properties[PROP_GLOW_WEIGHT] =
+    g_param_spec_float ("glow-weight", NULL, NULL,
+                        0.f, 100.f, 15.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_GLOW_BIAS] =
+    g_param_spec_float ("glow-bias", NULL, NULL,
+                        -100.f, 100.f, 0.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_GLOW_BEVEL] =
+    g_param_spec_float ("glow-bevel", NULL, NULL,
+                        0.f, 100.f, 3.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_GLOW_SMOOTH] =
+    g_param_spec_float ("glow-smooth", NULL, NULL,
+                        0.f, 100.f, 10.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
   properties[PROP_REFRACTION] =
     g_param_spec_float ("refraction", NULL, NULL,
-                        0.f, 80.f, 24.f,
+                        0.f, 150.f, 20.f,
                         G_PARAM_READWRITE |
                         G_PARAM_STATIC_STRINGS |
                         G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_DEPTH] =
     g_param_spec_float ("depth", NULL, NULL,
-                        0.f, 24.f, 6.9f,
+                        0.f, 150.f, 70.f,
                         G_PARAM_READWRITE |
                         G_PARAM_STATIC_STRINGS |
                         G_PARAM_EXPLICIT_NOTIFY);
@@ -1131,25 +1238,35 @@ gb_liquid_glass_effect_init (GbLiquidGlassEffect *self)
   self->mode = GB_BLUR_MODE_ACTOR;
   self->radius = 0;
   self->brightness = 1.f;
+  self->adaptive_brightness = FALSE;
+  self->adaptive_brightness_strength = 0.75f;
+  self->adaptive_brightness_minimum = 0.28f;
+  self->adaptive_brightness_quality = GB_ADAPTIVE_BRIGHTNESS_QUALITY_BALANCED;
   self->corner_radius = 0.f;
-  self->highlight = 0.35f;
-  self->refraction = 24.f;
-  self->depth = 6.9f;
+  self->glow_weight = 15.f;
+  self->glow_bias = 0.f;
+  self->glow_bevel = 3.f;
+  self->glow_smooth = 10.f;
+  self->refraction = 20.f;
+  self->depth = 70.f;
 
   self->actor_fb.pipeline = create_base_pipeline ();
   self->background_fb.pipeline = create_base_pipeline ();
-  self->brightness_fb.pipeline = create_brightness_pipeline ();
+  rebuild_brightness_pipeline (self);
   self->mask_fb.pipeline = create_mask_pipeline ();
-  self->brightness_uniform =
-    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline,
-                                        "brightness");
   self->corner_radius_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline,
                                         "u_corner_radius");
   self->mask_size_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size");
-  self->highlight_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_highlight");
+  self->glow_weight_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_weight");
+  self->glow_bias_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_bias");
+  self->glow_bevel_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_bevel");
+  self->glow_smooth_uniform =
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_smooth");
   self->refraction_uniform =
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_refraction");
   self->depth_uniform =
@@ -1216,6 +1333,126 @@ gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_BRIGHTNESS]);
+}
+
+gboolean
+gb_liquid_glass_effect_get_adaptive_brightness (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), FALSE);
+
+  return self->adaptive_brightness;
+}
+
+void
+gb_liquid_glass_effect_set_adaptive_brightness (GbLiquidGlassEffect *self,
+                                                gboolean             adaptive_brightness)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  adaptive_brightness = !!adaptive_brightness;
+
+  if (self->adaptive_brightness == adaptive_brightness)
+    return;
+
+  self->adaptive_brightness = adaptive_brightness;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS]);
+}
+
+float
+gb_liquid_glass_effect_get_adaptive_brightness_strength (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+
+  return self->adaptive_brightness_strength;
+}
+
+void
+gb_liquid_glass_effect_set_adaptive_brightness_strength (GbLiquidGlassEffect *self,
+                                                         float                strength)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  strength = sanitize_float_property (strength, 0.f, 1.f, 0.75f);
+
+  if (self->adaptive_brightness_strength == strength)
+    return;
+
+  self->adaptive_brightness_strength = strength;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS_STRENGTH]);
+}
+
+float
+gb_liquid_glass_effect_get_adaptive_brightness_minimum (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+
+  return self->adaptive_brightness_minimum;
+}
+
+void
+gb_liquid_glass_effect_set_adaptive_brightness_minimum (GbLiquidGlassEffect *self,
+                                                        float                minimum)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  minimum = sanitize_float_property (minimum, 0.f, 1.f, 0.28f);
+
+  if (self->adaptive_brightness_minimum == minimum)
+    return;
+
+  self->adaptive_brightness_minimum = minimum;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS_MINIMUM]);
+}
+
+GbAdaptiveBrightnessQuality
+gb_liquid_glass_effect_get_adaptive_brightness_quality (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self),
+                        GB_ADAPTIVE_BRIGHTNESS_QUALITY_BALANCED);
+
+  return self->adaptive_brightness_quality;
+}
+
+void
+gb_liquid_glass_effect_set_adaptive_brightness_quality (GbLiquidGlassEffect         *self,
+                                                        GbAdaptiveBrightnessQuality  quality)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  if (quality < GB_ADAPTIVE_BRIGHTNESS_QUALITY_PERFORMANCE ||
+      quality > GB_ADAPTIVE_BRIGHTNESS_QUALITY_QUALITY)
+    quality = GB_ADAPTIVE_BRIGHTNESS_QUALITY_BALANCED;
+
+  if (self->adaptive_brightness_quality == quality)
+    return;
+
+  self->adaptive_brightness_quality = quality;
+
+  /* Swap in the pre-compiled pipeline for this quality level. */
+  clear_framebuffer_data (&self->brightness_fb);
+  rebuild_brightness_pipeline (self);
+
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_ADAPTIVE_BRIGHTNESS_QUALITY]);
 }
 
 GbBlurMode
@@ -1290,7 +1527,7 @@ float
 gb_liquid_glass_effect_get_highlight (GbLiquidGlassEffect *self)
 {
   g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
-  return self->highlight;
+  return self->glow_weight / 42.85714f;
 }
 
 void
@@ -1300,17 +1537,117 @@ gb_liquid_glass_effect_set_highlight (GbLiquidGlassEffect *self,
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
   highlight = sanitize_float_property (highlight, 0.f, 1.f, 0.f);
+  gb_liquid_glass_effect_set_glow_weight (self, highlight * 42.85714f);
 
-  if (self->highlight == highlight)
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_HIGHLIGHT]);
+}
+
+float
+gb_liquid_glass_effect_get_glow_weight (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->glow_weight;
+}
+
+void
+gb_liquid_glass_effect_set_glow_weight (GbLiquidGlassEffect *self,
+                                        float                glow_weight)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  glow_weight = sanitize_float_property (glow_weight, 0.f, 100.f, 15.f);
+
+  if (self->glow_weight == glow_weight)
     return;
 
-  self->highlight = highlight;
+  self->glow_weight = glow_weight;
   self->cache_flags &= ~BLUR_APPLIED;
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
-  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_HIGHLIGHT]);
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_GLOW_WEIGHT]);
+}
+
+float
+gb_liquid_glass_effect_get_glow_bias (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->glow_bias;
+}
+
+void
+gb_liquid_glass_effect_set_glow_bias (GbLiquidGlassEffect *self,
+                                      float                glow_bias)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  glow_bias = sanitize_float_property (glow_bias, -100.f, 100.f, 0.f);
+
+  if (self->glow_bias == glow_bias)
+    return;
+
+  self->glow_bias = glow_bias;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_GLOW_BIAS]);
+}
+
+float
+gb_liquid_glass_effect_get_glow_bevel (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->glow_bevel;
+}
+
+void
+gb_liquid_glass_effect_set_glow_bevel (GbLiquidGlassEffect *self,
+                                       float                glow_bevel)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  glow_bevel = sanitize_float_property (glow_bevel, 0.f, 100.f, 3.f);
+
+  if (self->glow_bevel == glow_bevel)
+    return;
+
+  self->glow_bevel = glow_bevel;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_GLOW_BEVEL]);
+}
+
+float
+gb_liquid_glass_effect_get_glow_smooth (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->glow_smooth;
+}
+
+void
+gb_liquid_glass_effect_set_glow_smooth (GbLiquidGlassEffect *self,
+                                        float                glow_smooth)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  glow_smooth = sanitize_float_property (glow_smooth, 0.f, 100.f, 10.f);
+
+  if (self->glow_smooth == glow_smooth)
+    return;
+
+  self->glow_smooth = glow_smooth;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_GLOW_SMOOTH]);
 }
 
 float
@@ -1326,7 +1663,7 @@ gb_liquid_glass_effect_set_refraction (GbLiquidGlassEffect *self,
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
-  refraction = sanitize_float_property (refraction, 0.f, 80.f, 0.f);
+  refraction = sanitize_float_property (refraction, 0.f, 150.f, 20.f);
 
   if (self->refraction == refraction)
     return;
@@ -1353,7 +1690,7 @@ gb_liquid_glass_effect_set_depth (GbLiquidGlassEffect *self,
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
-  depth = sanitize_float_property (depth, 0.f, 24.f, 6.9f);
+  depth = sanitize_float_property (depth, 0.f, 150.f, 70.f);
 
   if (self->depth == depth)
     return;
