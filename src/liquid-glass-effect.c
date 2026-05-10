@@ -96,6 +96,7 @@ static const gchar *glass_glsl =
 
 #define MIN_DOWNSCALE_SIZE 256.f
 #define MAX_RADIUS 12.f
+#define MAX_EFFECT_RADIUS 200
 
 typedef enum
 {
@@ -554,6 +555,7 @@ gb_liquid_glass_effect_set_actor (ClutterActorMeta *meta,
   clear_framebuffer_data (&self->background_fb);
   clear_framebuffer_data (&self->brightness_fb);
   clear_framebuffer_data (&self->mask_fb);
+  self->cache_flags = 0;
 
   /* we keep a back pointer here, to avoid going through the ActorMeta */
   self->actor = clutter_actor_meta_get_actor (meta);
@@ -651,6 +653,8 @@ create_blur_nodes (GbLiquidGlassEffect *self,
   g_autoptr (ClutterPaintNode) brightness_node = NULL;
   g_autoptr (ClutterPaintNode) blur_node = NULL;
   g_autoptr (ClutterPaintNode) mask_node = NULL;
+  float scaled_width = self->tex_width / self->downscale_factor;
+  float scaled_height = self->tex_height / self->downscale_factor;
   float width;
   float height;
 
@@ -669,18 +673,14 @@ create_blur_nodes (GbLiquidGlassEffect *self,
                                            self->brightness_fb.pipeline);
   clutter_paint_node_set_static_name (brightness_node, "ShellLiquidGlassEffect (brightness)");
   clutter_paint_node_add_child (mask_node, brightness_node);
-  add_paint_rectangle (brightness_node,
-                       cogl_texture_get_width (self->mask_fb.texture),
-                       cogl_texture_get_height (self->mask_fb.texture));
+  add_paint_rectangle (brightness_node, scaled_width, scaled_height);
 
-  blur_node = clutter_blur_node_new (self->tex_width / self->downscale_factor,
-                                     self->tex_height / self->downscale_factor,
+  blur_node = clutter_blur_node_new (scaled_width,
+                                     scaled_height,
                                      self->radius / self->downscale_factor);
   clutter_paint_node_set_static_name (blur_node, "ShellLiquidGlassEffect (blur)");
   clutter_paint_node_add_child (brightness_node, blur_node);
-  add_paint_rectangle (blur_node,
-                       cogl_texture_get_width (self->mask_fb.texture),
-                       cogl_texture_get_height (self->mask_fb.texture));
+  add_paint_rectangle (blur_node, scaled_width, scaled_height);
 
   self->cache_flags |= BLUR_APPLIED;
 
@@ -747,7 +747,12 @@ update_framebuffers (GbLiquidGlassEffect *self,
 
   downscale_factor = calculate_downscale_factor (width, height, self->radius);
 
-  updated = update_actor_fbo (self, width, height, downscale_factor) &&
+  if (self->mode == GB_BLUR_MODE_ACTOR)
+    updated = update_actor_fbo (self, width, height, downscale_factor);
+  else
+    updated = TRUE;
+
+  updated = updated &&
             update_brightness_fbo (self, width, height, downscale_factor) &&
             update_mask_fbo (self, width, height, downscale_factor);
 
@@ -1123,7 +1128,7 @@ gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
 
   properties[PROP_RADIUS] =
     g_param_spec_int ("radius", NULL, NULL,
-                      0, G_MAXINT, 0,
+                      0, MAX_EFFECT_RADIUS, 0,
                       G_PARAM_READWRITE |
                       G_PARAM_STATIC_STRINGS |
                       G_PARAM_EXPLICIT_NOTIFY);
@@ -1293,7 +1298,7 @@ gb_liquid_glass_effect_set_radius (GbLiquidGlassEffect *self,
 {
   g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
 
-  radius = MAX (0, radius);
+  radius = CLAMP (radius, 0, MAX_EFFECT_RADIUS);
 
   if (self->radius == radius)
     return;
@@ -1485,8 +1490,11 @@ gb_liquid_glass_effect_set_mode (GbLiquidGlassEffect *self,
       break;
 
     case GB_BLUR_MODE_BACKGROUND:
+      clear_framebuffer_data (&self->actor_fb);
+      self->cache_flags &= ~ACTOR_PAINTED;
+      break;
+
     default:
-      /* Do nothing */
       break;
     }
 

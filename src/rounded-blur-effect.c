@@ -68,6 +68,7 @@ static const gchar *mask_glsl =
 
 #define MIN_DOWNSCALE_SIZE 256.f
 #define MAX_RADIUS 12.f
+#define MAX_EFFECT_RADIUS 200
 
 typedef enum
 {
@@ -290,6 +291,18 @@ update_mask_uniforms (GbBlurEffect *self,
 }
 
 static void
+add_paint_rectangle (ClutterPaintNode *node,
+                     float             width,
+                     float             height)
+{
+  clutter_paint_node_add_rectangle (node,
+                                    &(ClutterActorBox) {
+                                      0.f, 0.f,
+                                      width, height,
+                                    });
+}
+
+static void
 setup_projection_matrix (CoglFramebuffer *framebuffer,
                          float            width,
                          float            height)
@@ -472,6 +485,7 @@ gb_blur_effect_set_actor (ClutterActorMeta *meta,
   clear_framebuffer_data (&self->background_fb);
   clear_framebuffer_data (&self->brightness_fb);
   clear_framebuffer_data (&self->mask_fb);
+  self->cache_flags = 0;
 
   /* we keep a back pointer here, to avoid going through the ActorMeta */
   self->actor = clutter_actor_meta_get_actor (meta);
@@ -546,12 +560,7 @@ add_blurred_pipeline (GbBlurEffect    *self,
   clutter_paint_node_set_static_name (pipeline_node, "GbBlurEffect (final)");
   clutter_paint_node_add_child (node, pipeline_node);
 
-  clutter_paint_node_add_rectangle (pipeline_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      width,
-                                      height,
-                                    });
+  add_paint_rectangle (pipeline_node, width, height);
 }
 
 static ClutterPaintNode *
@@ -562,6 +571,8 @@ create_blur_nodes (GbBlurEffect    *self,
   g_autoptr (ClutterPaintNode) brightness_node = NULL;
   g_autoptr (ClutterPaintNode) blur_node = NULL;
   g_autoptr (ClutterPaintNode) mask_node = NULL;
+  float scaled_width = self->tex_width / self->downscale_factor;
+  float scaled_height = self->tex_height / self->downscale_factor;
   float width;
   float height;
 
@@ -572,35 +583,21 @@ create_blur_nodes (GbBlurEffect    *self,
                                                      self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (mask_node, "ShellBlurEffect (mask)");
   clutter_paint_node_add_child (node, mask_node);
-  clutter_paint_node_add_rectangle (mask_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      width, height,
-                                    });
+  add_paint_rectangle (mask_node, width, height);
 
   update_brightness (self, paint_opacity);
   brightness_node = clutter_layer_node_new_to_framebuffer (self->brightness_fb.framebuffer,
                                                            self->brightness_fb.pipeline);
   clutter_paint_node_set_static_name (brightness_node, "ShellBlurEffect (brightness)");
   clutter_paint_node_add_child (mask_node, brightness_node);
-  clutter_paint_node_add_rectangle (brightness_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      cogl_texture_get_width (self->mask_fb.texture),
-                                      cogl_texture_get_height (self->mask_fb.texture),
-                                    });
+  add_paint_rectangle (brightness_node, scaled_width, scaled_height);
 
-  blur_node = clutter_blur_node_new (self->tex_width / self->downscale_factor,
-                                     self->tex_height / self->downscale_factor,
+  blur_node = clutter_blur_node_new (scaled_width,
+                                     scaled_height,
                                      self->radius / self->downscale_factor);
   clutter_paint_node_set_static_name (blur_node, "ShellBlurEffect (blur)");
   clutter_paint_node_add_child (brightness_node, blur_node);
-  clutter_paint_node_add_rectangle (blur_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      cogl_texture_get_width (self->mask_fb.texture),
-                                      cogl_texture_get_height (self->mask_fb.texture),
-                                    });
+  add_paint_rectangle (blur_node, scaled_width, scaled_height);
 
   self->cache_flags |= BLUR_APPLIED;
 
@@ -634,12 +631,9 @@ paint_background (GbBlurEffect      *self,
                                            self->background_fb.pipeline);
   clutter_paint_node_set_static_name (background_node, "GbBlurEffect (background)");
   clutter_paint_node_add_child (node, background_node);
-  clutter_paint_node_add_rectangle (background_node,
-                                    &(ClutterActorBox) {
-                                      0.f, 0.f,
-                                      self->tex_width / self->downscale_factor,
-                                      self->tex_height / self->downscale_factor,
-                                    });
+  add_paint_rectangle (background_node,
+                       self->tex_width / self->downscale_factor,
+                       self->tex_height / self->downscale_factor);
 
   /* Blit node */
   src = clutter_paint_context_get_framebuffer (paint_context);
@@ -670,7 +664,12 @@ update_framebuffers (GbBlurEffect       *self,
 
   downscale_factor = calculate_downscale_factor (width, height, self->radius);
 
-  updated = update_actor_fbo (self, width, height, downscale_factor) &&
+  if (self->mode == GB_BLUR_MODE_ACTOR)
+    updated = update_actor_fbo (self, width, height, downscale_factor);
+  else
+    updated = TRUE;
+
+  updated = updated &&
             update_brightness_fbo (self, width, height, downscale_factor) &&
             update_mask_fbo (self, width, height, downscale_factor);
 
@@ -719,12 +718,9 @@ paint_actor_offscreen (GbBlurEffect           *self,
                                                           self->actor_fb.pipeline);
       clutter_paint_node_set_static_name (layer_node, "GbBlurEffect (actor offscreen)");
       clutter_paint_node_add_child (node, layer_node);
-      clutter_paint_node_add_rectangle (layer_node,
-                                        &(ClutterActorBox) {
-                                          0.f, 0.f,
-                                          self->tex_width / self->downscale_factor,
-                                          self->tex_height / self->downscale_factor,
-                                        });
+      add_paint_rectangle (layer_node,
+                           self->tex_width / self->downscale_factor,
+                           self->tex_height / self->downscale_factor);
 
       /* Transform node */
       graphene_matrix_init_scale (&transform,
@@ -748,12 +744,9 @@ paint_actor_offscreen (GbBlurEffect           *self,
       clutter_paint_node_set_static_name (pipeline_node,
                                           "GbBlurEffect (actor texture)");
       clutter_paint_node_add_child (node, pipeline_node);
-      clutter_paint_node_add_rectangle (pipeline_node,
-                                        &(ClutterActorBox) {
-                                          0.f, 0.f,
-                                          self->tex_width / self->downscale_factor,
-                                          self->tex_height / self->downscale_factor,
-                                        });
+      add_paint_rectangle (pipeline_node,
+                           self->tex_width / self->downscale_factor,
+                           self->tex_height / self->downscale_factor);
     }
 }
 
@@ -986,7 +979,7 @@ gb_blur_effect_class_init (GbBlurEffectClass *klass)
 
   properties[PROP_RADIUS] =
     g_param_spec_int ("radius", NULL, NULL,
-                      0, G_MAXINT, 0,
+                      0, MAX_EFFECT_RADIUS, 0,
                       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
 
   properties[PROP_BRIGHTNESS] =
@@ -1072,7 +1065,7 @@ gb_blur_effect_set_radius (GbBlurEffect *self,
 {
   g_return_if_fail (GB_IS_BLUR_EFFECT (self));
 
-  radius = MAX (0, radius);
+  radius = CLAMP (radius, 0, MAX_EFFECT_RADIUS);
 
   if (self->radius == radius)
     return;
@@ -1228,8 +1221,11 @@ gb_blur_effect_set_mode (GbBlurEffect *self,
       break;
 
     case GB_BLUR_MODE_BACKGROUND:
+      clear_framebuffer_data (&self->actor_fb);
+      self->cache_flags &= ~ACTOR_PAINTED;
+      break;
+
     default:
-      /* Do nothing */
       break;
     }
 
