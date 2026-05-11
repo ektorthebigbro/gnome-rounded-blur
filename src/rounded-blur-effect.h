@@ -21,6 +21,7 @@
 #pragma once
 
 #include <clutter/clutter.h>
+#include "blur-debug.h"
 
 G_BEGIN_DECLS
 

@@ -179,6 +179,7 @@ enum {
   PROP_GLOW_SMOOTH,
   PROP_REFRACTION,
   PROP_DEPTH,
+  PROP_DEBUG_LOGGING,
   N_PROPS
 };
 
@@ -559,6 +560,13 @@ gb_liquid_glass_effect_set_actor (ClutterActorMeta *meta,
 
   /* we keep a back pointer here, to avoid going through the ActorMeta */
   self->actor = clutter_actor_meta_get_actor (meta);
+
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] set-actor actor=%p name=%s mode=%d radius=%d",
+                 self,
+                 self->actor,
+                 self->actor ? clutter_actor_get_name (self->actor) : "(none)",
+                 self->mode,
+                 self->radius);
 }
 
 static void
@@ -581,7 +589,7 @@ update_actor_box (GbLiquidGlassEffect *self,
       stage_view = clutter_paint_context_get_stage_view (paint_context);
 
       clutter_actor_get_transformed_position (self->actor, &origin_x, &origin_y);
-      clutter_actor_get_transformed_size (self->actor, &width, &height);
+      clutter_actor_get_size (self->actor, &width, &height);
 
       if (stage_view)
         {
@@ -733,19 +741,37 @@ paint_background (GbLiquidGlassEffect *self,
 
 static gboolean
 update_framebuffers (GbLiquidGlassEffect *self,
-                     ClutterActorBox     *source_actor_box)
+                     ClutterActorBox     *source_actor_box,
+                     gboolean            *reallocated)
 {
   gboolean updated = FALSE;
+  gboolean already_ready;
   float downscale_factor;
   float height = -1;
   float width = -1;
 
+  if (reallocated)
+    *reallocated = FALSE;
+
   clutter_actor_box_get_size (source_actor_box, &width, &height);
 
   if (!is_valid_dimension (width) || !is_valid_dimension (height))
+    {
+      GB_BLUR_DEBUG ("LiquidGlassEffect[%p] framebuffers skipped invalid-size w=%.1f h=%.1f mode=%d radius=%d",
+                     self, width, height, self->mode, self->radius);
     return FALSE;
+    }
 
   downscale_factor = calculate_downscale_factor (width, height, self->radius);
+  already_ready = self->tex_width == width &&
+                  self->tex_height == height &&
+                  self->downscale_factor == downscale_factor &&
+                  self->brightness_fb.framebuffer &&
+                  self->mask_fb.framebuffer &&
+                  (self->mode != GB_BLUR_MODE_ACTOR ||
+                   self->actor_fb.framebuffer) &&
+                  (self->mode != GB_BLUR_MODE_BACKGROUND ||
+                   self->background_fb.framebuffer);
 
   if (self->mode == GB_BLUR_MODE_ACTOR)
     updated = update_actor_fbo (self, width, height, downscale_factor);
@@ -765,6 +791,21 @@ update_framebuffers (GbLiquidGlassEffect *self,
       self->tex_height = height;
       self->downscale_factor = downscale_factor;
     }
+
+  if (reallocated)
+    *reallocated = updated && !already_ready;
+
+  if (!updated || !already_ready)
+    GB_BLUR_DEBUG ("LiquidGlassEffect[%p] framebuffers %s w=%.1f h=%.1f downscale=%.1f mode=%d radius=%d adaptive=%d quality=%d",
+                   self,
+                   updated ? "allocated" : "failed",
+                   width,
+                   height,
+                   downscale_factor,
+                   self->mode,
+                   self->radius,
+                   self->adaptive_brightness,
+                   self->adaptive_brightness_quality);
 
   return updated;
 }
@@ -866,6 +907,10 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
 {
   GbLiquidGlassEffect *self = GB_LIQUID_GLASS_EFFECT (effect);
   uint8_t paint_opacity;
+  gint64 start_us = 0;
+
+  if (G_UNLIKELY (gb_blur_debug_logging_enabled))
+    start_us = g_get_monotonic_time ();
 
   if (!self->actor)
     return;
@@ -888,16 +933,21 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
           goto fail;
         }
 
-      if (needs_repaint (self, flags))
+      gboolean repaint_required = needs_repaint (self, flags);
+      if (repaint_required)
         {
           ClutterActorBox source_actor_box;
+          gboolean reallocated = FALSE;
+          float source_width;
+          float source_height;
 
           update_actor_box (self, paint_context, &source_actor_box);
+          clutter_actor_box_get_size (&source_actor_box, &source_width, &source_height);
 
           /* Failing to create or update the offscreen framebuffers prevents
            * the entire effect to be applied.
            */
-          if (!update_framebuffers (self, &source_actor_box))
+          if (!update_framebuffers (self, &source_actor_box, &reallocated))
             goto fail;
 
           blur_node = create_blur_nodes (self, node, paint_opacity);
@@ -912,11 +962,53 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
               paint_background (self, blur_node, paint_context, &source_actor_box);
               break;
             }
+
+          if (G_UNLIKELY (gb_blur_debug_logging_enabled))
+            {
+              double elapsed_ms = (g_get_monotonic_time () - start_us) / 1000.0;
+
+              if (reallocated || elapsed_ms >= 2.0)
+                GB_BLUR_DEBUG ("LiquidGlassEffect[%p] paint repaint elapsed=%.3fms actor=%p name=%s mode=%d source=%.1fx%.1f tex=%.1fx%.1f downscale=%.1f radius=%d brightness=%.3f adaptive=%d quality=%d refraction=%.1f depth=%.1f flags=0x%x",
+                               self,
+                               elapsed_ms,
+                               self->actor,
+                               clutter_actor_get_name (self->actor),
+                               self->mode,
+                               source_width,
+                               source_height,
+                               self->tex_width,
+                               self->tex_height,
+                               self->downscale_factor,
+                               self->radius,
+                               self->brightness,
+                               self->adaptive_brightness,
+                               self->adaptive_brightness_quality,
+                               self->refraction,
+                               self->depth,
+                               flags);
+            }
         }
       else
         {
           /* Use the cached pipeline if no repaint is needed */
           add_blurred_pipeline (self, node, paint_opacity);
+          if (G_UNLIKELY (gb_blur_debug_logging_enabled))
+            {
+              double elapsed_ms = (g_get_monotonic_time () - start_us) / 1000.0;
+
+              if (elapsed_ms >= 2.0)
+                GB_BLUR_DEBUG ("LiquidGlassEffect[%p] paint cached elapsed=%.3fms actor=%p name=%s mode=%d tex=%.1fx%.1f downscale=%.1f radius=%d flags=0x%x",
+                               self,
+                               elapsed_ms,
+                               self->actor,
+                               clutter_actor_get_name (self->actor),
+                               self->mode,
+                               self->tex_width,
+                               self->tex_height,
+                               self->downscale_factor,
+                               self->radius,
+                               flags);
+            }
         }
 
       /* Background blur needs to paint the actor after painting the blurred
@@ -936,6 +1028,14 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
     }
 
 fail:
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] paint fallback elapsed=%.3fms actor=%p name=%s mode=%d radius=%d flags=0x%x",
+                 self,
+                 start_us ? (g_get_monotonic_time () - start_us) / 1000.0 : 0.0,
+                 self->actor,
+                 self->actor ? clutter_actor_get_name (self->actor) : "(none)",
+                 self->mode,
+                 self->radius,
+                 flags);
   /* When no blur is applied, or the offscreen framebuffers
    * couldn't be created, fallback to simply painting the actor.
    */
@@ -1030,6 +1130,10 @@ gb_liquid_glass_effect_get_property (GObject    *object,
       g_value_set_float (value, self->depth);
       break;
 
+    case PROP_DEBUG_LOGGING:
+      g_value_set_boolean (value, gb_get_debug_logging_enabled ());
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
@@ -1104,6 +1208,10 @@ gb_liquid_glass_effect_set_property (GObject      *object,
 
     case PROP_DEPTH:
       gb_liquid_glass_effect_set_depth (self, g_value_get_float (value));
+      break;
+
+    case PROP_DEBUG_LOGGING:
+      gb_set_debug_logging_enabled (g_value_get_boolean (value));
       break;
 
     default:
@@ -1234,6 +1342,11 @@ gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
                         G_PARAM_STATIC_STRINGS |
                         G_PARAM_EXPLICIT_NOTIFY);
 
+  properties[PROP_DEBUG_LOGGING] =
+    g_param_spec_boolean ("debug-logging", NULL, NULL,
+                          FALSE,
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
   g_object_class_install_properties (object_class, N_PROPS, properties);
 }
 
@@ -1306,6 +1419,9 @@ gb_liquid_glass_effect_set_radius (GbLiquidGlassEffect *self,
   self->radius = radius;
   self->cache_flags &= ~BLUR_APPLIED;
 
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] radius=%d queue-repaint=%d actor=%p",
+                 self, self->radius, self->actor != NULL, self->actor);
+
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
@@ -1333,6 +1449,9 @@ gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
 
   self->brightness = brightness;
   self->cache_flags &= ~BLUR_APPLIED;
+
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] brightness=%.3f queue-repaint=%d actor=%p",
+                 self, self->brightness, self->actor != NULL, self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1362,6 +1481,9 @@ gb_liquid_glass_effect_set_adaptive_brightness (GbLiquidGlassEffect *self,
   self->adaptive_brightness = adaptive_brightness;
   self->cache_flags &= ~BLUR_APPLIED;
 
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness=%d queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness, self->actor != NULL, self->actor);
+
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
@@ -1390,6 +1512,9 @@ gb_liquid_glass_effect_set_adaptive_brightness_strength (GbLiquidGlassEffect *se
   self->adaptive_brightness_strength = strength;
   self->cache_flags &= ~BLUR_APPLIED;
 
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness-strength=%.3f queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness_strength, self->actor != NULL, self->actor);
+
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
@@ -1417,6 +1542,9 @@ gb_liquid_glass_effect_set_adaptive_brightness_minimum (GbLiquidGlassEffect *sel
 
   self->adaptive_brightness_minimum = minimum;
   self->cache_flags &= ~BLUR_APPLIED;
+
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness-minimum=%.3f queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness_minimum, self->actor != NULL, self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1447,6 +1575,9 @@ gb_liquid_glass_effect_set_adaptive_brightness_quality (GbLiquidGlassEffect     
     return;
 
   self->adaptive_brightness_quality = quality;
+
+  GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness-quality=%d queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness_quality, self->actor != NULL, self->actor);
 
   /* Swap in the pre-compiled pipeline for this quality level. */
   clear_framebuffer_data (&self->brightness_fb);

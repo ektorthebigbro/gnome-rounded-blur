@@ -21,6 +21,7 @@
 #pragma once
 
 #include "rounded-blur-effect.h"
+#include "blur-debug.h"
 #include "adaptive-brightness.h"
 
 G_BEGIN_DECLS

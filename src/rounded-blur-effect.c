@@ -129,6 +129,7 @@ enum {
   PROP_ADAPTIVE_BRIGHTNESS_MINIMUM,
   PROP_MODE,
   PROP_CORNER_RADIUS,
+  PROP_DEBUG_LOGGING,
   N_PROPS
 };
 
@@ -472,7 +473,7 @@ calculate_downscale_factor (float width,
 
 static void
 gb_blur_effect_set_actor (ClutterActorMeta *meta,
-                           ClutterActor     *actor)
+                          ClutterActor     *actor)
 {
   GbBlurEffect *self = GB_BLUR_EFFECT (meta);
   ClutterActorMetaClass *meta_class;
@@ -489,6 +490,13 @@ gb_blur_effect_set_actor (ClutterActorMeta *meta,
 
   /* we keep a back pointer here, to avoid going through the ActorMeta */
   self->actor = clutter_actor_meta_get_actor (meta);
+
+  GB_BLUR_DEBUG ("BlurEffect[%p] set-actor actor=%p name=%s mode=%d radius=%d",
+                 self,
+                 self->actor,
+                 self->actor ? clutter_actor_get_name (self->actor) : "(none)",
+                 self->mode,
+                 self->radius);
 }
 
 static void
@@ -511,7 +519,7 @@ update_actor_box (GbBlurEffect       *self,
       stage_view = clutter_paint_context_get_stage_view (paint_context);
 
       clutter_actor_get_transformed_position (self->actor, &origin_x, &origin_y);
-      clutter_actor_get_transformed_size (self->actor, &width, &height);
+      clutter_actor_get_size (self->actor, &width, &height);
 
       if (stage_view)
         {
@@ -650,19 +658,37 @@ paint_background (GbBlurEffect      *self,
 
 static gboolean
 update_framebuffers (GbBlurEffect       *self,
-                     ClutterActorBox     *source_actor_box)
+                     ClutterActorBox     *source_actor_box,
+                     gboolean            *reallocated)
 {
   gboolean updated = FALSE;
+  gboolean already_ready;
   float downscale_factor;
   float height = -1;
   float width = -1;
 
+  if (reallocated)
+    *reallocated = FALSE;
+
   clutter_actor_box_get_size (source_actor_box, &width, &height);
 
   if (!is_valid_dimension (width) || !is_valid_dimension (height))
+    {
+      GB_BLUR_DEBUG ("BlurEffect[%p] framebuffers skipped invalid-size w=%.1f h=%.1f mode=%d radius=%d",
+                     self, width, height, self->mode, self->radius);
     return FALSE;
+    }
 
   downscale_factor = calculate_downscale_factor (width, height, self->radius);
+  already_ready = self->tex_width == width &&
+                  self->tex_height == height &&
+                  self->downscale_factor == downscale_factor &&
+                  self->brightness_fb.framebuffer &&
+                  self->mask_fb.framebuffer &&
+                  (self->mode != GB_BLUR_MODE_ACTOR ||
+                   self->actor_fb.framebuffer) &&
+                  (self->mode != GB_BLUR_MODE_BACKGROUND ||
+                   self->background_fb.framebuffer);
 
   if (self->mode == GB_BLUR_MODE_ACTOR)
     updated = update_actor_fbo (self, width, height, downscale_factor);
@@ -682,6 +708,20 @@ update_framebuffers (GbBlurEffect       *self,
       self->tex_height = height;
       self->downscale_factor = downscale_factor;
     }
+
+  if (reallocated)
+    *reallocated = updated && !already_ready;
+
+  if (!updated || !already_ready)
+    GB_BLUR_DEBUG ("BlurEffect[%p] framebuffers %s w=%.1f h=%.1f downscale=%.1f mode=%d radius=%d adaptive=%d",
+                   self,
+                   updated ? "allocated" : "failed",
+                   width,
+                   height,
+                   downscale_factor,
+                   self->mode,
+                   self->radius,
+                   self->adaptive_brightness);
 
   return updated;
 }
@@ -782,6 +822,10 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
 {
   GbBlurEffect *self = GB_BLUR_EFFECT (effect);
   uint8_t paint_opacity;
+  gint64 start_us = 0;
+
+  if (G_UNLIKELY (gb_blur_debug_logging_enabled))
+    start_us = g_get_monotonic_time ();
 
   if (!self->actor)
     return;
@@ -804,16 +848,21 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
           goto fail;
         }
 
-      if (needs_repaint (self, flags))
+      gboolean repaint_required = needs_repaint (self, flags);
+      if (repaint_required)
         {
           ClutterActorBox source_actor_box;
+          gboolean reallocated = FALSE;
+          float source_width;
+          float source_height;
 
           update_actor_box (self, paint_context, &source_actor_box);
+          clutter_actor_box_get_size (&source_actor_box, &source_width, &source_height);
 
           /* Failing to create or update the offscreen framebuffers prevents
            * the entire effect to be applied.
            */
-          if (!update_framebuffers (self, &source_actor_box))
+          if (!update_framebuffers (self, &source_actor_box, &reallocated))
             goto fail;
 
           blur_node = create_blur_nodes (self, node, paint_opacity);
@@ -828,11 +877,52 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
               paint_background (self, blur_node, paint_context, &source_actor_box);
               break;
             }
+
+          if (G_UNLIKELY (gb_blur_debug_logging_enabled))
+            {
+              double elapsed_ms = (g_get_monotonic_time () - start_us) / 1000.0;
+
+              if (reallocated || elapsed_ms >= 2.0)
+                GB_BLUR_DEBUG ("BlurEffect[%p] paint repaint elapsed=%.3fms actor=%p name=%s mode=%d source=%.1fx%.1f tex=%.1fx%.1f downscale=%.1f radius=%d brightness=%.3f adaptive=%d strength=%.3f min=%.3f flags=0x%x",
+                               self,
+                               elapsed_ms,
+                               self->actor,
+                               clutter_actor_get_name (self->actor),
+                               self->mode,
+                               source_width,
+                               source_height,
+                               self->tex_width,
+                               self->tex_height,
+                               self->downscale_factor,
+                               self->radius,
+                               self->brightness,
+                               self->adaptive_brightness,
+                               self->adaptive_brightness_strength,
+                               self->adaptive_brightness_minimum,
+                               flags);
+            }
         }
       else
         {
           /* Use the cached pipeline if no repaint is needed */
           add_blurred_pipeline (self, node, paint_opacity);
+          if (G_UNLIKELY (gb_blur_debug_logging_enabled))
+            {
+              double elapsed_ms = (g_get_monotonic_time () - start_us) / 1000.0;
+
+              if (elapsed_ms >= 2.0)
+                GB_BLUR_DEBUG ("BlurEffect[%p] paint cached elapsed=%.3fms actor=%p name=%s mode=%d tex=%.1fx%.1f downscale=%.1f radius=%d flags=0x%x",
+                               self,
+                               elapsed_ms,
+                               self->actor,
+                               clutter_actor_get_name (self->actor),
+                               self->mode,
+                               self->tex_width,
+                               self->tex_height,
+                               self->downscale_factor,
+                               self->radius,
+                               flags);
+            }
         }
 
       /* Background blur needs to paint the actor after painting the blurred
@@ -852,6 +942,14 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
     }
 
 fail:
+  GB_BLUR_DEBUG ("BlurEffect[%p] paint fallback elapsed=%.3fms actor=%p name=%s mode=%d radius=%d flags=0x%x",
+                 self,
+                 start_us ? (g_get_monotonic_time () - start_us) / 1000.0 : 0.0,
+                 self->actor,
+                 self->actor ? clutter_actor_get_name (self->actor) : "(none)",
+                 self->mode,
+                 self->radius,
+                 flags);
   /* When no blur is applied, or the offscreen framebuffers
    * couldn't be created, fallback to simply painting the actor.
    */
@@ -914,6 +1012,10 @@ gb_blur_effect_get_property (GObject    *object,
       g_value_set_float (value, self->corner_radius);
       break;
 
+    case PROP_DEBUG_LOGGING:
+      g_value_set_boolean (value, gb_get_debug_logging_enabled ());
+      break;
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
     }
@@ -955,6 +1057,10 @@ gb_blur_effect_set_property (GObject      *object,
 
     case PROP_CORNER_RADIUS:
       gb_blur_effect_set_corner_radius (self, g_value_get_float (value));
+      break;
+
+    case PROP_DEBUG_LOGGING:
+      gb_set_debug_logging_enabled (g_value_get_boolean (value));
       break;
 
     default:
@@ -1012,6 +1118,11 @@ gb_blur_effect_class_init (GbBlurEffectClass *klass)
     g_param_spec_float ("corner-radius", NULL, NULL,
                         0.f, G_MAXFLOAT, 0.f,
                         G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS | G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_DEBUG_LOGGING] =
+    g_param_spec_boolean ("debug-logging", NULL, NULL,
+                          FALSE,
+                          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (object_class, N_PROPS, properties);
 }
@@ -1073,6 +1184,9 @@ gb_blur_effect_set_radius (GbBlurEffect *self,
   self->radius = radius;
   self->cache_flags &= ~BLUR_APPLIED;
 
+  GB_BLUR_DEBUG ("BlurEffect[%p] radius=%d queue-repaint=%d actor=%p",
+                 self, self->radius, self->actor != NULL, self->actor);
+
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
@@ -1100,6 +1214,9 @@ gb_blur_effect_set_brightness (GbBlurEffect *self,
 
   self->brightness = brightness;
   self->cache_flags &= ~BLUR_APPLIED;
+
+  GB_BLUR_DEBUG ("BlurEffect[%p] brightness=%.3f queue-repaint=%d actor=%p",
+                 self, self->brightness, self->actor != NULL, self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1129,6 +1246,9 @@ gb_blur_effect_set_adaptive_brightness (GbBlurEffect *self,
   self->adaptive_brightness = adaptive_brightness;
   self->cache_flags &= ~BLUR_APPLIED;
 
+  GB_BLUR_DEBUG ("BlurEffect[%p] adaptive-brightness=%d queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness, self->actor != NULL, self->actor);
+
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
@@ -1156,6 +1276,9 @@ gb_blur_effect_set_adaptive_brightness_strength (GbBlurEffect *self,
 
   self->adaptive_brightness_strength = strength;
   self->cache_flags &= ~BLUR_APPLIED;
+
+  GB_BLUR_DEBUG ("BlurEffect[%p] adaptive-brightness-strength=%.3f queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness_strength, self->actor != NULL, self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1185,6 +1308,9 @@ gb_blur_effect_set_adaptive_brightness_minimum (GbBlurEffect *self,
   self->adaptive_brightness_minimum = minimum;
   self->cache_flags &= ~BLUR_APPLIED;
 
+  GB_BLUR_DEBUG ("BlurEffect[%p] adaptive-brightness-minimum=%.3f queue-repaint=%d actor=%p",
+                 self, self->adaptive_brightness_minimum, self->actor != NULL, self->actor);
+
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
@@ -1213,6 +1339,9 @@ gb_blur_effect_set_mode (GbBlurEffect *self,
 
   self->mode = mode;
   self->cache_flags &= ~BLUR_APPLIED;
+
+  GB_BLUR_DEBUG ("BlurEffect[%p] mode=%d queue-repaint=%d actor=%p",
+                 self, self->mode, self->actor != NULL, self->actor);
 
   switch (mode)
     {
@@ -1255,6 +1384,9 @@ gb_blur_effect_set_corner_radius (GbBlurEffect *self,
 
   self->corner_radius = corner_radius;
   self->cache_flags &= ~BLUR_APPLIED;
+
+  GB_BLUR_DEBUG ("BlurEffect[%p] corner-radius=%.1f queue-repaint=%d actor=%p",
+                 self, self->corner_radius, self->actor != NULL, self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));

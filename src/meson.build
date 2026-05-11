@@ -1,5 +1,6 @@
 # Library sources
 lib_sources = [
+  'blur-debug.c',
   'rounded-blur-effect.c',
   'liquid-glass-effect.c',
   'adaptive-brightness.c',
@@ -9,6 +10,7 @@ lib_sources = [
 # Library headers
 lib_headers = [
   'adaptive-brightness.h',
+  'blur-debug.h',
   'rounded-blur-effect.h',
   'liquid-glass-effect.h',
 ]
