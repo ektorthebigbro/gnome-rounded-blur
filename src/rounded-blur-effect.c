@@ -143,12 +143,14 @@ create_base_pipeline (void)
   if (G_UNLIKELY (base_pipeline == NULL))
     {
        ClutterBackend *backend = clutter_get_default_backend ();
-      
-      CoglContext *ctx =
-        clutter_backend_get_cogl_context (backend);
-      
-        
-      
+      CoglContext *ctx;
+
+      if (!backend)
+        return NULL;
+
+      ctx = clutter_backend_get_cogl_context (backend);
+      if (!ctx)
+        return NULL;
 
       base_pipeline = cogl_pipeline_new (ctx);
       cogl_pipeline_set_layer_null_texture (base_pipeline, 0);
@@ -174,6 +176,8 @@ create_brightness_pipeline (void)
       CoglSnippet *snippet;
 
       brightness_pipeline = create_base_pipeline ();
+      if (!brightness_pipeline)
+        return NULL;
 
       snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
                                   brightness_glsl_declarations,
@@ -194,6 +198,9 @@ create_mask_pipeline (void)
   {
     CoglSnippet *snippet;
     mask_pipeline = create_base_pipeline ();
+    if (!mask_pipeline)
+      return NULL;
+
     snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT,
                                 mask_glsl_declarations,
                                 mask_glsl);
@@ -272,7 +279,8 @@ update_brightness (GbBlurEffect *self,
 static void
 update_mask_uniforms (GbBlurEffect *self,
                       float          width,
-                      float          height)
+                      float          height,
+                      float          corner_radius)
 {
   if (!self->mask_fb.pipeline)
     return;
@@ -280,7 +288,7 @@ update_mask_uniforms (GbBlurEffect *self,
   if (self->corner_radius_uniform > -1)
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
                                   self->corner_radius_uniform,
-                                  self->corner_radius);
+                                  corner_radius);
 
   if (self->mask_size_uniform > -1)
   {
@@ -492,8 +500,8 @@ gb_blur_effect_set_actor (ClutterActorMeta *meta,
   self->actor = clutter_actor_meta_get_actor (meta);
 
   GB_BLUR_DEBUG ("BlurEffect[%p] set-actor actor=%p name=%s mode=%d radius=%d",
-                 self,
-                 self->actor,
+                 (void *) self,
+                 (void *) self->actor,
                  self->actor ? clutter_actor_get_name (self->actor) : "(none)",
                  self->mode,
                  self->radius);
@@ -562,7 +570,7 @@ add_blurred_pipeline (GbBlurEffect    *self,
   clutter_actor_get_size (self->actor, &width, &height);
 
   update_brightness (self, paint_opacity);
-  update_mask_uniforms (self, width, height);
+  update_mask_uniforms (self, width, height, self->corner_radius);
 
   pipeline_node = clutter_pipeline_node_new (self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (pipeline_node, "GbBlurEffect (final)");
@@ -581,17 +589,16 @@ create_blur_nodes (GbBlurEffect    *self,
   g_autoptr (ClutterPaintNode) mask_node = NULL;
   float scaled_width = self->tex_width / self->downscale_factor;
   float scaled_height = self->tex_height / self->downscale_factor;
-  float width;
-  float height;
 
-  clutter_actor_get_size (self->actor, &width, &height);
-
-  update_mask_uniforms (self, width, height);
+  update_mask_uniforms (self,
+                        scaled_width,
+                        scaled_height,
+                        self->corner_radius / self->downscale_factor);
   mask_node = clutter_layer_node_new_to_framebuffer (self->mask_fb.framebuffer,
                                                      self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (mask_node, "ShellBlurEffect (mask)");
   clutter_paint_node_add_child (node, mask_node);
-  add_paint_rectangle (mask_node, width, height);
+  add_paint_rectangle (mask_node, scaled_width, scaled_height);
 
   update_brightness (self, paint_opacity);
   brightness_node = clutter_layer_node_new_to_framebuffer (self->brightness_fb.framebuffer,
@@ -675,7 +682,7 @@ update_framebuffers (GbBlurEffect       *self,
   if (!is_valid_dimension (width) || !is_valid_dimension (height))
     {
       GB_BLUR_DEBUG ("BlurEffect[%p] framebuffers skipped invalid-size w=%.1f h=%.1f mode=%d radius=%d",
-                     self, width, height, self->mode, self->radius);
+                     (void *) self, width, height, self->mode, self->radius);
     return FALSE;
     }
 
@@ -714,7 +721,7 @@ update_framebuffers (GbBlurEffect       *self,
 
   if (!updated || !already_ready)
     GB_BLUR_DEBUG ("BlurEffect[%p] framebuffers %s w=%.1f h=%.1f downscale=%.1f mode=%d radius=%d adaptive=%d",
-                   self,
+                   (void *) self,
                    updated ? "allocated" : "failed",
                    width,
                    height,
@@ -884,9 +891,9 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
 
               if (reallocated || elapsed_ms >= 2.0)
                 GB_BLUR_DEBUG ("BlurEffect[%p] paint repaint elapsed=%.3fms actor=%p name=%s mode=%d source=%.1fx%.1f tex=%.1fx%.1f downscale=%.1f radius=%d brightness=%.3f adaptive=%d strength=%.3f min=%.3f flags=0x%x",
-                               self,
+                               (void *) self,
                                elapsed_ms,
-                               self->actor,
+                               (void *) self->actor,
                                clutter_actor_get_name (self->actor),
                                self->mode,
                                source_width,
@@ -912,9 +919,9 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
 
               if (elapsed_ms >= 2.0)
                 GB_BLUR_DEBUG ("BlurEffect[%p] paint cached elapsed=%.3fms actor=%p name=%s mode=%d tex=%.1fx%.1f downscale=%.1f radius=%d flags=0x%x",
-                               self,
+                               (void *) self,
                                elapsed_ms,
-                               self->actor,
+                               (void *) self->actor,
                                clutter_actor_get_name (self->actor),
                                self->mode,
                                self->tex_width,
@@ -943,9 +950,9 @@ gb_blur_effect_paint_node (ClutterEffect           *effect,
 
 fail:
   GB_BLUR_DEBUG ("BlurEffect[%p] paint fallback elapsed=%.3fms actor=%p name=%s mode=%d radius=%d flags=0x%x",
-                 self,
+                 (void *) self,
                  start_us ? (g_get_monotonic_time () - start_us) / 1000.0 : 0.0,
-                 self->actor,
+                 (void *) self->actor,
                  self->actor ? clutter_actor_get_name (self->actor) : "(none)",
                  self->mode,
                  self->radius,
@@ -1142,18 +1149,18 @@ gb_blur_effect_init (GbBlurEffect *self)
   self->background_fb.pipeline = create_base_pipeline ();
   self->brightness_fb.pipeline = create_brightness_pipeline ();
   self->mask_fb.pipeline = create_mask_pipeline ();
-  self->brightness_uniform =
-    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "brightness");
-  self->adaptive_brightness_uniform =
-    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness");
-  self->adaptive_brightness_strength_uniform =
-    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness_strength");
-  self->adaptive_brightness_minimum_uniform =
-    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness_minimum");
-  self->corner_radius_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_corner_radius");
-  self->mask_size_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size");
+  self->brightness_uniform = self->brightness_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "brightness") : -1;
+  self->adaptive_brightness_uniform = self->brightness_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness") : -1;
+  self->adaptive_brightness_strength_uniform = self->brightness_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness_strength") : -1;
+  self->adaptive_brightness_minimum_uniform = self->brightness_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->brightness_fb.pipeline, "u_adaptive_brightness_minimum") : -1;
+  self->corner_radius_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_corner_radius") : -1;
+  self->mask_size_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size") : -1;
 }
 
 GbBlurEffect *
@@ -1185,7 +1192,7 @@ gb_blur_effect_set_radius (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] radius=%d queue-repaint=%d actor=%p",
-                 self, self->radius, self->actor != NULL, self->actor);
+                 (void *) self, self->radius, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1216,7 +1223,7 @@ gb_blur_effect_set_brightness (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] brightness=%.3f queue-repaint=%d actor=%p",
-                 self, self->brightness, self->actor != NULL, self->actor);
+                 (void *) self, self->brightness, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1247,7 +1254,7 @@ gb_blur_effect_set_adaptive_brightness (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] adaptive-brightness=%d queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1278,7 +1285,7 @@ gb_blur_effect_set_adaptive_brightness_strength (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] adaptive-brightness-strength=%.3f queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness_strength, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness_strength, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1309,7 +1316,7 @@ gb_blur_effect_set_adaptive_brightness_minimum (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] adaptive-brightness-minimum=%.3f queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness_minimum, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness_minimum, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1341,7 +1348,7 @@ gb_blur_effect_set_mode (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] mode=%d queue-repaint=%d actor=%p",
-                 self, self->mode, self->actor != NULL, self->actor);
+                 (void *) self, self->mode, self->actor != NULL, (void *) self->actor);
 
   switch (mode)
     {
@@ -1386,7 +1393,7 @@ gb_blur_effect_set_corner_radius (GbBlurEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("BlurEffect[%p] corner-radius=%.1f queue-repaint=%d actor=%p",
-                 self, self->corner_radius, self->actor != NULL, self->actor);
+                 (void *) self, self->corner_radius, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));

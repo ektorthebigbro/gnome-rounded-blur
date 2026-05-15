@@ -193,7 +193,14 @@ create_base_pipeline (void)
   if (G_UNLIKELY (base_pipeline == NULL))
     {
       ClutterBackend *backend = clutter_get_default_backend ();
-      CoglContext *ctx = clutter_backend_get_cogl_context (backend);
+      CoglContext *ctx;
+
+      if (!backend)
+        return NULL;
+
+      ctx = clutter_backend_get_cogl_context (backend);
+      if (!ctx)
+        return NULL;
 
       base_pipeline = cogl_pipeline_new (ctx);
       cogl_pipeline_set_layer_null_texture (base_pipeline, 0);
@@ -215,6 +222,17 @@ rebuild_brightness_pipeline (GbLiquidGlassEffect *self)
   g_autoptr (CoglPipeline) base = create_base_pipeline ();
 
   g_clear_object (&self->brightness_fb.pipeline);
+
+  if (!base)
+    {
+      self->brightness_uniform = -1;
+      self->adaptive_brightness_uniform = -1;
+      self->adaptive_brightness_strength_uniform = -1;
+      self->adaptive_brightness_minimum_uniform = -1;
+      self->adaptive_brightness_tex_size_uniform = -1;
+      return;
+    }
+
   self->brightness_fb.pipeline =
     gb_adaptive_brightness_create_pipeline (base, self->adaptive_brightness_quality);
 
@@ -245,6 +263,8 @@ create_mask_pipeline (void)
       CoglSnippet *lookup_snippet;
 
       mask_pipeline = create_base_pipeline ();
+      if (!mask_pipeline)
+        return NULL;
 
       fragment_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_FRAGMENT_GLOBALS,
                                            size_glsl_declarations,
@@ -325,7 +345,8 @@ update_brightness (GbLiquidGlassEffect *self,
 static void
 update_mask_uniforms (GbLiquidGlassEffect *self,
                       float                width,
-                      float                height)
+                      float                height,
+                      float                corner_radius)
 {
   if (!self->mask_fb.pipeline)
     return;
@@ -333,7 +354,7 @@ update_mask_uniforms (GbLiquidGlassEffect *self,
   if (self->corner_radius_uniform > -1)
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
                                   self->corner_radius_uniform,
-                                  self->corner_radius);
+                                  corner_radius);
 
   if (self->mask_size_uniform > -1)
     {
@@ -562,8 +583,8 @@ gb_liquid_glass_effect_set_actor (ClutterActorMeta *meta,
   self->actor = clutter_actor_meta_get_actor (meta);
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] set-actor actor=%p name=%s mode=%d radius=%d",
-                 self,
-                 self->actor,
+                 (void *) self,
+                 (void *) self->actor,
                  self->actor ? clutter_actor_get_name (self->actor) : "(none)",
                  self->mode,
                  self->radius);
@@ -644,7 +665,7 @@ add_blurred_pipeline (GbLiquidGlassEffect *self,
   clutter_actor_get_size (self->actor, &width, &height);
 
   update_brightness (self, paint_opacity);
-  update_mask_uniforms (self, width, height);
+  update_mask_uniforms (self, width, height, self->corner_radius);
 
   pipeline_node = clutter_pipeline_node_new (self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (pipeline_node, "GbLiquidGlassEffect (final)");
@@ -663,17 +684,16 @@ create_blur_nodes (GbLiquidGlassEffect *self,
   g_autoptr (ClutterPaintNode) mask_node = NULL;
   float scaled_width = self->tex_width / self->downscale_factor;
   float scaled_height = self->tex_height / self->downscale_factor;
-  float width;
-  float height;
 
-  clutter_actor_get_size (self->actor, &width, &height);
-
-  update_mask_uniforms (self, width, height);
+  update_mask_uniforms (self,
+                        scaled_width,
+                        scaled_height,
+                        self->corner_radius / self->downscale_factor);
   mask_node = clutter_layer_node_new_to_framebuffer (self->mask_fb.framebuffer,
                                                      self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (mask_node, "ShellLiquidGlassEffect (mask)");
   clutter_paint_node_add_child (node, mask_node);
-  add_paint_rectangle (mask_node, width, height);
+  add_paint_rectangle (mask_node, scaled_width, scaled_height);
 
   update_brightness (self, paint_opacity);
   brightness_node =
@@ -758,7 +778,7 @@ update_framebuffers (GbLiquidGlassEffect *self,
   if (!is_valid_dimension (width) || !is_valid_dimension (height))
     {
       GB_BLUR_DEBUG ("LiquidGlassEffect[%p] framebuffers skipped invalid-size w=%.1f h=%.1f mode=%d radius=%d",
-                     self, width, height, self->mode, self->radius);
+                     (void *) self, width, height, self->mode, self->radius);
     return FALSE;
     }
 
@@ -797,7 +817,7 @@ update_framebuffers (GbLiquidGlassEffect *self,
 
   if (!updated || !already_ready)
     GB_BLUR_DEBUG ("LiquidGlassEffect[%p] framebuffers %s w=%.1f h=%.1f downscale=%.1f mode=%d radius=%d adaptive=%d quality=%d",
-                   self,
+                   (void *) self,
                    updated ? "allocated" : "failed",
                    width,
                    height,
@@ -969,9 +989,9 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
 
               if (reallocated || elapsed_ms >= 2.0)
                 GB_BLUR_DEBUG ("LiquidGlassEffect[%p] paint repaint elapsed=%.3fms actor=%p name=%s mode=%d source=%.1fx%.1f tex=%.1fx%.1f downscale=%.1f radius=%d brightness=%.3f adaptive=%d quality=%d refraction=%.1f depth=%.1f flags=0x%x",
-                               self,
+                               (void *) self,
                                elapsed_ms,
-                               self->actor,
+                               (void *) self->actor,
                                clutter_actor_get_name (self->actor),
                                self->mode,
                                source_width,
@@ -998,9 +1018,9 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
 
               if (elapsed_ms >= 2.0)
                 GB_BLUR_DEBUG ("LiquidGlassEffect[%p] paint cached elapsed=%.3fms actor=%p name=%s mode=%d tex=%.1fx%.1f downscale=%.1f radius=%d flags=0x%x",
-                               self,
+                               (void *) self,
                                elapsed_ms,
-                               self->actor,
+                               (void *) self->actor,
                                clutter_actor_get_name (self->actor),
                                self->mode,
                                self->tex_width,
@@ -1029,9 +1049,9 @@ gb_liquid_glass_effect_paint_node (ClutterEffect           *effect,
 
 fail:
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] paint fallback elapsed=%.3fms actor=%p name=%s mode=%d radius=%d flags=0x%x",
-                 self,
+                 (void *) self,
                  start_us ? (g_get_monotonic_time () - start_us) / 1000.0 : 0.0,
-                 self->actor,
+                 (void *) self->actor,
                  self->actor ? clutter_actor_get_name (self->actor) : "(none)",
                  self->mode,
                  self->radius,
@@ -1372,23 +1392,23 @@ gb_liquid_glass_effect_init (GbLiquidGlassEffect *self)
   self->background_fb.pipeline = create_base_pipeline ();
   rebuild_brightness_pipeline (self);
   self->mask_fb.pipeline = create_mask_pipeline ();
-  self->corner_radius_uniform =
+  self->corner_radius_uniform = self->mask_fb.pipeline ?
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline,
-                                        "u_corner_radius");
-  self->mask_size_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size");
-  self->glow_weight_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_weight");
-  self->glow_bias_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_bias");
-  self->glow_bevel_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_bevel");
-  self->glow_smooth_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_smooth");
-  self->refraction_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_refraction");
-  self->depth_uniform =
-    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_depth");
+                                        "u_corner_radius") : -1;
+  self->mask_size_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_size") : -1;
+  self->glow_weight_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_weight") : -1;
+  self->glow_bias_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_bias") : -1;
+  self->glow_bevel_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_bevel") : -1;
+  self->glow_smooth_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_glow_smooth") : -1;
+  self->refraction_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_refraction") : -1;
+  self->depth_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_depth") : -1;
 }
 
 GbLiquidGlassEffect *
@@ -1420,7 +1440,7 @@ gb_liquid_glass_effect_set_radius (GbLiquidGlassEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] radius=%d queue-repaint=%d actor=%p",
-                 self, self->radius, self->actor != NULL, self->actor);
+                 (void *) self, self->radius, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1451,7 +1471,7 @@ gb_liquid_glass_effect_set_brightness (GbLiquidGlassEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] brightness=%.3f queue-repaint=%d actor=%p",
-                 self, self->brightness, self->actor != NULL, self->actor);
+                 (void *) self, self->brightness, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1482,7 +1502,7 @@ gb_liquid_glass_effect_set_adaptive_brightness (GbLiquidGlassEffect *self,
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness=%d queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1513,7 +1533,7 @@ gb_liquid_glass_effect_set_adaptive_brightness_strength (GbLiquidGlassEffect *se
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness-strength=%.3f queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness_strength, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness_strength, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1544,7 +1564,7 @@ gb_liquid_glass_effect_set_adaptive_brightness_minimum (GbLiquidGlassEffect *sel
   self->cache_flags &= ~BLUR_APPLIED;
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness-minimum=%.3f queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness_minimum, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness_minimum, self->actor != NULL, (void *) self->actor);
 
   if (self->actor)
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
@@ -1577,7 +1597,7 @@ gb_liquid_glass_effect_set_adaptive_brightness_quality (GbLiquidGlassEffect     
   self->adaptive_brightness_quality = quality;
 
   GB_BLUR_DEBUG ("LiquidGlassEffect[%p] adaptive-brightness-quality=%d queue-repaint=%d actor=%p",
-                 self, self->adaptive_brightness_quality, self->actor != NULL, self->actor);
+                 (void *) self, self->adaptive_brightness_quality, self->actor != NULL, (void *) self->actor);
 
   /* Swap in the pre-compiled pipeline for this quality level. */
   clear_framebuffer_data (&self->brightness_fb);
