@@ -62,7 +62,8 @@ static const gchar *mask_glsl =
 "  vec2 p  = uv * u_size;                                                  \n"
 "  vec2 q  = abs(p - 0.5 * u_size) - (0.5 * u_size - u_corner_radius);     \n"
 "  float dist = length(max(q, vec2(0.0))) - u_corner_radius;               \n"
-"  float m = step(dist, 0.0);                                              \n"
+"  float aa = max(fwidth(dist) * 0.5, 0.5);                                \n"
+"  float m = 1.0 - smoothstep(-aa, aa, dist);                              \n"
 "  cogl_color_out.rgb *= m;                                                \n"
 "  cogl_color_out.a   *= m;                                                \n";
 
