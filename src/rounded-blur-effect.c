@@ -589,16 +589,17 @@ create_blur_nodes (GbBlurEffect    *self,
   g_autoptr (ClutterPaintNode) mask_node = NULL;
   float scaled_width = self->tex_width / self->downscale_factor;
   float scaled_height = self->tex_height / self->downscale_factor;
+  float width;
+  float height;
 
-  update_mask_uniforms (self,
-                        scaled_width,
-                        scaled_height,
-                        self->corner_radius / self->downscale_factor);
+  clutter_actor_get_size (self->actor, &width, &height);
+
+  update_mask_uniforms (self, width, height, self->corner_radius);
   mask_node = clutter_layer_node_new_to_framebuffer (self->mask_fb.framebuffer,
                                                      self->mask_fb.pipeline);
   clutter_paint_node_set_static_name (mask_node, "ShellBlurEffect (mask)");
   clutter_paint_node_add_child (node, mask_node);
-  add_paint_rectangle (mask_node, scaled_width, scaled_height);
+  add_paint_rectangle (mask_node, width, height);
 
   update_brightness (self, paint_opacity);
   brightness_node = clutter_layer_node_new_to_framebuffer (self->brightness_fb.framebuffer,
