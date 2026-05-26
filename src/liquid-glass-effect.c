@@ -81,7 +81,7 @@ static const gchar *glass_glsl =
   "  vec2 local = (pos - half_size) / half_size;\n"
   "  vec2 quad = abs(pos - half_size) - half_size + radius;\n"
   "  float dist = length(max(quad, vec2(0.0))) - radius;\n"
-  "  float mask = 1.0 - smoothstep(0.0, 1.0, dist);\n"
+  "  float mask = radius > 0.0 ? 1.0 - smoothstep(-0.5, 0.5, dist) : 1.0;\n"
   "\n"
   "  float angle_glow = sin(atan(local.y, local.x) - 0.5);\n"
   "  float edge_glow = smoothstep(max(u_glow_bevel, 1.0),\n"

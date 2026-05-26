@@ -59,10 +59,19 @@ static const gchar *mask_glsl_declarations =
 
 static const gchar *mask_glsl =
 "  vec2 uv = cogl_tex_coord_in[0].st;                                      \n"
-"  vec2 p  = uv * u_size;                                                  \n"
-"  vec2 q  = abs(p - 0.5 * u_size) - (0.5 * u_size - u_corner_radius);     \n"
-"  float dist = length(max(q, vec2(0.0))) - u_corner_radius;               \n"
-"  float m = step(dist, 0.0);                                              \n"
+"  vec2 size = max(u_size, vec2(1.0));                                     \n"
+"  vec2 half_size = max(size * 0.5, vec2(0.5));                            \n"
+"  float radius = clamp(u_corner_radius,                                   \n"
+"                       0.0,                                               \n"
+"                       max(min(half_size.x, half_size.y) - 0.5, 0.0));    \n"
+"  float m = 1.0;                                                          \n"
+"  if (radius > 0.0)                                                       \n"
+"    {                                                                     \n"
+"      vec2 p = uv * size;                                                 \n"
+"      vec2 q = abs(p - half_size) - max(half_size - radius, vec2(0.0));   \n"
+"      float dist = length(max(q, vec2(0.0))) - radius;                    \n"
+"      m = 1.0 - smoothstep(-0.5, 0.5, dist);                              \n"
+"    }                                                                     \n"
 "  cogl_color_out.rgb *= m;                                                \n"
 "  cogl_color_out.a   *= m;                                                \n";
 
