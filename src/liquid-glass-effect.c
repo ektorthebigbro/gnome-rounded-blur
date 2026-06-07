@@ -31,7 +31,9 @@ static const gchar *size_glsl_declarations =
 
 static const gchar *glass_lookup_glsl_declarations =
   "uniform float u_refraction;\n"
-  "uniform float u_depth;\n";
+  "uniform float u_depth;\n"
+  "uniform float u_dispersion;\n"
+  "uniform float u_splay;\n";
 
 static const gchar *glass_lookup_glsl =
   "  vec2 uv = cogl_tex_coord.xy;\n"
@@ -41,33 +43,38 @@ static const gchar *glass_lookup_glsl =
   "                       0.0,\n"
   "                       max(min(half_size.x, half_size.y) - 0.5, 0.0));\n"
   "\n"
-  "  const float GLASS_A = 0.7;\n"
-  "  const float GLASS_B = 2.3;\n"
-  "  const float GLASS_C = 5.2;\n"
-  "  const float M_E = 2.718281828459045;\n"
-  "\n"
   "  vec2 pos = uv * size;\n"
   "  vec2 local = (pos - half_size) / half_size;\n"
   "  vec2 quad = abs(pos - half_size) - half_size + radius;\n"
   "  float dist = length(max(quad, vec2(0.0))) - radius;\n"
   "\n"
-  "  float depth = clamp(u_depth / 100.0, 0.0, 1.0);\n"
-  "  float d = mix(0.05, 0.3, 1.0 - depth);\n"
-  "  float power = clamp(u_refraction / 100.0, 0.0, 1.5);\n"
-  "  float lens = 1.0 - GLASS_B * pow(GLASS_C * M_E,\n"
-  "                                   -d * -dist - GLASS_A);\n"
-  "  vec2 refracted = local * pow(max(lens, 0.0001), power);\n"
-  "  vec2 refracted_uv = (refracted * half_size + half_size) / size;\n"
+  "  float min_size = min(size.x, size.y);\n"
+  "  float inverse_sdf = -dist / max(min_size, 0.1);\n"
+  "  float max_depth = min(min_size * 0.5, 50.0);\n"
+  "  float edge_falloff = min(max(u_depth, 0.1), max_depth) / max(min_size, 0.1);\n"
+  "  float from_center = 1.0 - clamp(inverse_sdf / min(edge_falloff, 0.4), 0.0, 1.0);\n"
+  "  float sphere = 1.0 - sqrt(max(1.0 - pow(from_center, 2.0), 0.0));\n"
+  "  float displacement = sphere * clamp(u_refraction / 100.0, 0.0, 1.5) *\n"
+  "                       (1.0 + clamp(u_dispersion / 100.0, 0.0, 1.0) * 0.15);\n"
+  "  vec2 edge_mask = smoothstep(half_size - min_size, half_size, abs(pos - half_size));\n"
+  "  vec2 reach = vec2(max_depth) * mix(edge_mask, vec2(1.0), clamp(u_splay / 100.0, 0.0, 1.0)) * 1.5;\n"
+  "  vec2 refracted_uv = (pos - local * displacement * reach) / size;\n"
   "\n"
   "  cogl_tex_coord.xy = clamp(refracted_uv,\n"
   "                            vec2(3.0) / size,\n"
   "                            vec2(1.0) - vec2(3.0) / size);\n";
 
 static const gchar *glass_glsl_declarations =
+  "uniform float u_depth;\n"
   "uniform float u_glow_weight;\n"
   "uniform float u_glow_bias;\n"
   "uniform float u_glow_bevel;\n"
-  "uniform float u_glow_smooth;\n";
+  "uniform float u_glow_smooth;\n"
+  "uniform float u_light_angle;\n"
+  "uniform float u_light_intensity;\n"
+  "uniform float u_light_ambient;\n"
+  "uniform float u_light_depth;\n"
+  "uniform float u_light_feather;\n";
 
 static const gchar *glass_glsl =
   "  vec2 uv = cogl_tex_coord_in[0].st;\n"
@@ -83,14 +90,28 @@ static const gchar *glass_glsl =
   "  float dist = length(max(quad, vec2(0.0))) - radius;\n"
   "  float mask = radius > 0.0 ? 1.0 - smoothstep(-0.5, 0.5, dist) : 1.0;\n"
   "\n"
-  "  float angle_glow = sin(atan(local.y, local.x) - 0.5);\n"
-  "  float edge_glow = smoothstep(max(u_glow_bevel, 1.0),\n"
-  "                               -u_glow_smooth,\n"
-  "                               -dist);\n"
-  "  float glow_mul = angle_glow * u_glow_weight * edge_glow +\n"
-  "                   1.0 + u_glow_bias;\n"
+  "  float min_size = min(size.x, size.y);\n"
+  "  float inverse_sdf = -dist / max(min_size, 0.1);\n"
+  "  float edge_falloff = min(max(u_depth, 0.1), min(min_size * 0.5, 50.0)) / max(min_size, 0.1);\n"
+  "  float from_center = 1.0 - clamp(inverse_sdf / min(edge_falloff, 0.4), 0.0, 1.0);\n"
+  "  float angle = atan(-local.y, local.x);\n"
+  "  float rim_light = sin(angle + u_light_angle);\n"
+  "  float effective_light_intensity = clamp(u_light_intensity + u_glow_weight * 0.08, 0.0, 2.0);\n"
+  "  float effective_light_ambient = clamp(u_light_ambient + u_glow_bias * 0.1, 0.0, 2.0);\n"
+  "  float effective_light_depth = max(u_light_depth + u_glow_bevel * 0.03, 0.1);\n"
+  "  float effective_light_feather = clamp(u_light_feather + u_glow_smooth * 0.002, 0.0, 1.0);\n"
+  "  float hard_dist = 1.0 - clamp(inverse_sdf * min_size / effective_light_depth, 0.0, 1.0);\n"
+  "  float hard_mask = smoothstep(0.0, max(effective_light_feather, 0.1) * 2.0, hard_dist);\n"
+  "  float soft_mask = smoothstep(0.0, 5.0, from_center);\n"
+  "  float shine = clamp(rim_light, 0.0, 1.0);\n"
+  "  float shadow = clamp(-rim_light, 0.0, 0.7);\n"
+  "  float rim_lit = pow(shine, 4.0) * 0.5 + shine * 0.75;\n"
+  "  float rim_fill = pow(shadow, 4.0) * 0.5 + shadow * 0.75;\n"
+  "  float rim_combined = rim_lit + rim_fill + effective_light_ambient;\n"
   "\n"
-  "  cogl_color_out.rgb *= glow_mul;\n"
+  "  cogl_color_out.rgb += hard_mask * effective_light_intensity * rim_combined;\n"
+  "  cogl_color_out.rgb -= soft_mask * effective_light_intensity * shine * 0.15;\n"
+  "  cogl_color_out.rgb += soft_mask * effective_light_intensity * shadow * 0.65;\n"
   "  cogl_color_out.rgb *= mask;\n"
   "  cogl_color_out.a *= mask;\n";
 
@@ -141,6 +162,13 @@ struct _GbLiquidGlassEffect
   int glow_smooth_uniform;
   int refraction_uniform;
   int depth_uniform;
+  int dispersion_uniform;
+  int splay_uniform;
+  int light_angle_uniform;
+  int light_intensity_uniform;
+  int light_ambient_uniform;
+  int light_depth_uniform;
+  int light_feather_uniform;
 
   GbBlurMode mode;
   float downscale_factor;
@@ -158,6 +186,13 @@ struct _GbLiquidGlassEffect
   float glow_smooth;
   float refraction;
   float depth;
+  float dispersion;
+  float splay;
+  float light_angle;
+  float light_intensity;
+  float light_ambient;
+  float light_depth;
+  float light_feather;
 };
 
 G_DEFINE_TYPE (GbLiquidGlassEffect, gb_liquid_glass_effect, CLUTTER_TYPE_EFFECT)
@@ -179,6 +214,13 @@ enum {
   PROP_GLOW_SMOOTH,
   PROP_REFRACTION,
   PROP_DEPTH,
+  PROP_DISPERSION,
+  PROP_SPLAY,
+  PROP_LIGHT_ANGLE,
+  PROP_LIGHT_INTENSITY,
+  PROP_LIGHT_AMBIENT,
+  PROP_LIGHT_DEPTH,
+  PROP_LIGHT_FEATHER,
   PROP_DEBUG_LOGGING,
   N_PROPS
 };
@@ -394,6 +436,41 @@ update_mask_uniforms (GbLiquidGlassEffect *self,
     cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
                                   self->depth_uniform,
                                   self->depth);
+
+  if (self->dispersion_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->dispersion_uniform,
+                                  self->dispersion);
+
+  if (self->splay_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->splay_uniform,
+                                  self->splay);
+
+  if (self->light_angle_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->light_angle_uniform,
+                                  self->light_angle * (float) G_PI / 180.f);
+
+  if (self->light_intensity_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->light_intensity_uniform,
+                                  self->light_intensity / 100.f);
+
+  if (self->light_ambient_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->light_ambient_uniform,
+                                  self->light_ambient / 100.f);
+
+  if (self->light_depth_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->light_depth_uniform,
+                                  self->light_depth);
+
+  if (self->light_feather_uniform > -1)
+    cogl_pipeline_set_uniform_1f (self->mask_fb.pipeline,
+                                  self->light_feather_uniform,
+                                  self->light_feather / 100.f);
 }
 
 static void
@@ -1151,6 +1228,34 @@ gb_liquid_glass_effect_get_property (GObject    *object,
       g_value_set_float (value, self->depth);
       break;
 
+    case PROP_DISPERSION:
+      g_value_set_float (value, self->dispersion);
+      break;
+
+    case PROP_SPLAY:
+      g_value_set_float (value, self->splay);
+      break;
+
+    case PROP_LIGHT_ANGLE:
+      g_value_set_float (value, self->light_angle);
+      break;
+
+    case PROP_LIGHT_INTENSITY:
+      g_value_set_float (value, self->light_intensity);
+      break;
+
+    case PROP_LIGHT_AMBIENT:
+      g_value_set_float (value, self->light_ambient);
+      break;
+
+    case PROP_LIGHT_DEPTH:
+      g_value_set_float (value, self->light_depth);
+      break;
+
+    case PROP_LIGHT_FEATHER:
+      g_value_set_float (value, self->light_feather);
+      break;
+
     case PROP_DEBUG_LOGGING:
       g_value_set_boolean (value, gb_get_debug_logging_enabled ());
       break;
@@ -1229,6 +1334,34 @@ gb_liquid_glass_effect_set_property (GObject      *object,
 
     case PROP_DEPTH:
       gb_liquid_glass_effect_set_depth (self, g_value_get_float (value));
+      break;
+
+    case PROP_DISPERSION:
+      gb_liquid_glass_effect_set_dispersion (self, g_value_get_float (value));
+      break;
+
+    case PROP_SPLAY:
+      gb_liquid_glass_effect_set_splay (self, g_value_get_float (value));
+      break;
+
+    case PROP_LIGHT_ANGLE:
+      gb_liquid_glass_effect_set_light_angle (self, g_value_get_float (value));
+      break;
+
+    case PROP_LIGHT_INTENSITY:
+      gb_liquid_glass_effect_set_light_intensity (self, g_value_get_float (value));
+      break;
+
+    case PROP_LIGHT_AMBIENT:
+      gb_liquid_glass_effect_set_light_ambient (self, g_value_get_float (value));
+      break;
+
+    case PROP_LIGHT_DEPTH:
+      gb_liquid_glass_effect_set_light_depth (self, g_value_get_float (value));
+      break;
+
+    case PROP_LIGHT_FEATHER:
+      gb_liquid_glass_effect_set_light_feather (self, g_value_get_float (value));
       break;
 
     case PROP_DEBUG_LOGGING:
@@ -1363,6 +1496,55 @@ gb_liquid_glass_effect_class_init (GbLiquidGlassEffectClass *klass)
                         G_PARAM_STATIC_STRINGS |
                         G_PARAM_EXPLICIT_NOTIFY);
 
+  properties[PROP_DISPERSION] =
+    g_param_spec_float ("dispersion", NULL, NULL,
+                        0.f, 100.f, 20.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_SPLAY] =
+    g_param_spec_float ("splay", NULL, NULL,
+                        0.f, 100.f, 0.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_LIGHT_ANGLE] =
+    g_param_spec_float ("light-angle", NULL, NULL,
+                        0.f, 360.f, 45.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_LIGHT_INTENSITY] =
+    g_param_spec_float ("light-intensity", NULL, NULL,
+                        0.f, 100.f, 50.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_LIGHT_AMBIENT] =
+    g_param_spec_float ("light-ambient", NULL, NULL,
+                        0.f, 100.f, 50.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_LIGHT_DEPTH] =
+    g_param_spec_float ("light-depth", NULL, NULL,
+                        0.f, 10.f, 1.5f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
+  properties[PROP_LIGHT_FEATHER] =
+    g_param_spec_float ("light-feather", NULL, NULL,
+                        0.f, 100.f, 70.f,
+                        G_PARAM_READWRITE |
+                        G_PARAM_STATIC_STRINGS |
+                        G_PARAM_EXPLICIT_NOTIFY);
+
   properties[PROP_DEBUG_LOGGING] =
     g_param_spec_boolean ("debug-logging", NULL, NULL,
                           FALSE,
@@ -1388,6 +1570,13 @@ gb_liquid_glass_effect_init (GbLiquidGlassEffect *self)
   self->glow_smooth = 10.f;
   self->refraction = 20.f;
   self->depth = 70.f;
+  self->dispersion = 20.f;
+  self->splay = 0.f;
+  self->light_angle = 45.f;
+  self->light_intensity = 50.f;
+  self->light_ambient = 50.f;
+  self->light_depth = 1.5f;
+  self->light_feather = 70.f;
 
   self->actor_fb.pipeline = create_base_pipeline ();
   self->background_fb.pipeline = create_base_pipeline ();
@@ -1410,6 +1599,20 @@ gb_liquid_glass_effect_init (GbLiquidGlassEffect *self)
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_refraction") : -1;
   self->depth_uniform = self->mask_fb.pipeline ?
     cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_depth") : -1;
+  self->dispersion_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_dispersion") : -1;
+  self->splay_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_splay") : -1;
+  self->light_angle_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_light_angle") : -1;
+  self->light_intensity_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_light_intensity") : -1;
+  self->light_ambient_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_light_ambient") : -1;
+  self->light_depth_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_light_depth") : -1;
+  self->light_feather_uniform = self->mask_fb.pipeline ?
+    cogl_pipeline_get_uniform_location (self->mask_fb.pipeline, "u_light_feather") : -1;
 }
 
 GbLiquidGlassEffect *
@@ -1861,4 +2064,193 @@ gb_liquid_glass_effect_set_depth (GbLiquidGlassEffect *self,
     clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
 
   g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DEPTH]);
+}
+
+float
+gb_liquid_glass_effect_get_dispersion (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 20.f);
+  return self->dispersion;
+}
+
+void
+gb_liquid_glass_effect_set_dispersion (GbLiquidGlassEffect *self,
+                                       float                dispersion)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  dispersion = sanitize_float_property (dispersion, 0.f, 100.f, 20.f);
+
+  if (self->dispersion == dispersion)
+    return;
+
+  self->dispersion = dispersion;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_DISPERSION]);
+}
+
+float
+gb_liquid_glass_effect_get_splay (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 0.f);
+  return self->splay;
+}
+
+void
+gb_liquid_glass_effect_set_splay (GbLiquidGlassEffect *self,
+                                  float                splay)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  splay = sanitize_float_property (splay, 0.f, 100.f, 0.f);
+
+  if (self->splay == splay)
+    return;
+
+  self->splay = splay;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_SPLAY]);
+}
+
+float
+gb_liquid_glass_effect_get_light_angle (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 45.f);
+  return self->light_angle;
+}
+
+void
+gb_liquid_glass_effect_set_light_angle (GbLiquidGlassEffect *self,
+                                        float                light_angle)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  light_angle = sanitize_float_property (light_angle, 0.f, 360.f, 45.f);
+
+  if (self->light_angle == light_angle)
+    return;
+
+  self->light_angle = light_angle;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_LIGHT_ANGLE]);
+}
+
+float
+gb_liquid_glass_effect_get_light_intensity (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 50.f);
+  return self->light_intensity;
+}
+
+void
+gb_liquid_glass_effect_set_light_intensity (GbLiquidGlassEffect *self,
+                                            float                light_intensity)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  light_intensity = sanitize_float_property (light_intensity, 0.f, 100.f, 50.f);
+
+  if (self->light_intensity == light_intensity)
+    return;
+
+  self->light_intensity = light_intensity;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_LIGHT_INTENSITY]);
+}
+
+float
+gb_liquid_glass_effect_get_light_ambient (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 50.f);
+  return self->light_ambient;
+}
+
+void
+gb_liquid_glass_effect_set_light_ambient (GbLiquidGlassEffect *self,
+                                          float                light_ambient)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  light_ambient = sanitize_float_property (light_ambient, 0.f, 100.f, 50.f);
+
+  if (self->light_ambient == light_ambient)
+    return;
+
+  self->light_ambient = light_ambient;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_LIGHT_AMBIENT]);
+}
+
+float
+gb_liquid_glass_effect_get_light_depth (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 1.5f);
+  return self->light_depth;
+}
+
+void
+gb_liquid_glass_effect_set_light_depth (GbLiquidGlassEffect *self,
+                                        float                light_depth)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  light_depth = sanitize_float_property (light_depth, 0.f, 10.f, 1.5f);
+
+  if (self->light_depth == light_depth)
+    return;
+
+  self->light_depth = light_depth;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_LIGHT_DEPTH]);
+}
+
+float
+gb_liquid_glass_effect_get_light_feather (GbLiquidGlassEffect *self)
+{
+  g_return_val_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self), 70.f);
+  return self->light_feather;
+}
+
+void
+gb_liquid_glass_effect_set_light_feather (GbLiquidGlassEffect *self,
+                                          float                light_feather)
+{
+  g_return_if_fail (GB_IS_LIQUID_GLASS_EFFECT (self));
+
+  light_feather = sanitize_float_property (light_feather, 0.f, 100.f, 70.f);
+
+  if (self->light_feather == light_feather)
+    return;
+
+  self->light_feather = light_feather;
+  self->cache_flags &= ~BLUR_APPLIED;
+
+  if (self->actor)
+    clutter_effect_queue_repaint (CLUTTER_EFFECT (self));
+
+  g_object_notify_by_pspec (G_OBJECT (self), properties[PROP_LIGHT_FEATHER]);
 }

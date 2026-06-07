@@ -97,4 +97,32 @@ float gb_liquid_glass_effect_get_depth (GbLiquidGlassEffect *self);
 void gb_liquid_glass_effect_set_depth (GbLiquidGlassEffect *self,
                                        float                depth);
 
+float gb_liquid_glass_effect_get_dispersion (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_dispersion (GbLiquidGlassEffect *self,
+                                            float                dispersion);
+
+float gb_liquid_glass_effect_get_splay (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_splay (GbLiquidGlassEffect *self,
+                                       float                splay);
+
+float gb_liquid_glass_effect_get_light_angle (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_light_angle (GbLiquidGlassEffect *self,
+                                             float                light_angle);
+
+float gb_liquid_glass_effect_get_light_intensity (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_light_intensity (GbLiquidGlassEffect *self,
+                                                 float                light_intensity);
+
+float gb_liquid_glass_effect_get_light_ambient (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_light_ambient (GbLiquidGlassEffect *self,
+                                               float                light_ambient);
+
+float gb_liquid_glass_effect_get_light_depth (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_light_depth (GbLiquidGlassEffect *self,
+                                             float                light_depth);
+
+float gb_liquid_glass_effect_get_light_feather (GbLiquidGlassEffect *self);
+void gb_liquid_glass_effect_set_light_feather (GbLiquidGlassEffect *self,
+                                               float                light_feather);
+
 G_END_DECLS
