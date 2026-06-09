@@ -4,6 +4,8 @@
 # Works on Fedora, Arch, Debian/Ubuntu, openSUSE, and similar distributions.
 set -euo pipefail
 
+original_args=("$@")
+
 usage() {
     cat <<'EOF'
 Usage: install.sh [OPTIONS]
@@ -49,6 +51,30 @@ EOF
 }
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ ! -f "${repo_root}/meson.build" || ! -d "${repo_root}/src" ]]; then
+    if ! command -v curl >/dev/null 2>&1; then
+        printf 'error: curl is required when install.sh is run outside a source checkout\n' >&2
+        exit 1
+    fi
+    if ! command -v tar >/dev/null 2>&1; then
+        printf 'error: tar is required when install.sh is run outside a source checkout\n' >&2
+        exit 1
+    fi
+
+    tmp_bootstrap="$(mktemp -d)"
+    trap 'rm -rf "${tmp_bootstrap}"' EXIT
+    tag="$(
+        curl -fsSL "https://api.github.com/repos/ektorthebigbro/gnome-rounded-blur/releases/latest" |
+            sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' |
+            head -n1
+    )"
+    [[ -n "${tag}" ]] || { printf 'error: could not resolve latest gnome-rounded-blur release tag\n' >&2; exit 1; }
+    curl -fL --retry 3 --connect-timeout 15 \
+        "https://github.com/ektorthebigbro/gnome-rounded-blur/archive/refs/tags/${tag}.tar.gz" |
+        tar -xz -C "${tmp_bootstrap}" --strip-components=1
+    exec bash "${tmp_bootstrap}/install.sh" "${original_args[@]}"
+fi
 
 # Defaults
 prefix="/usr"

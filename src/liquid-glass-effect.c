@@ -60,12 +60,12 @@ static const gchar *glass_lookup_glsl =
   "  vec2 reach = vec2(max_depth) * mix(edge_mask, vec2(1.0), clamp(u_splay / 100.0, 0.0, 1.0)) * 1.5;\n"
   "  vec2 refracted_uv = (pos - local * displacement * reach) / size;\n"
   "\n"
-  "  cogl_tex_coord.xy = clamp(refracted_uv,\n"
-  "                            vec2(3.0) / size,\n"
-  "                            vec2(1.0) - vec2(3.0) / size);\n";
+  "  vec2 sample_uv = clamp(refracted_uv,\n"
+  "                         vec2(3.0) / size,\n"
+  "                         vec2(1.0) - vec2(3.0) / size);\n"
+  "  cogl_texel = texture2D(cogl_sampler, sample_uv);\n";
 
 static const gchar *glass_glsl_declarations =
-  "uniform float u_depth;\n"
   "uniform float u_glow_weight;\n"
   "uniform float u_glow_bias;\n"
   "uniform float u_glow_bevel;\n"
@@ -317,7 +317,7 @@ create_mask_pipeline (void)
       lookup_snippet = cogl_snippet_new (COGL_SNIPPET_HOOK_TEXTURE_LOOKUP,
                                          glass_lookup_glsl_declarations,
                                          NULL);
-      cogl_snippet_set_pre (lookup_snippet, glass_lookup_glsl);
+      cogl_snippet_set_replace (lookup_snippet, glass_lookup_glsl);
       cogl_pipeline_add_layer_snippet (mask_pipeline, 0, lookup_snippet);
       g_object_unref (lookup_snippet);
 

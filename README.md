@@ -41,6 +41,14 @@ build dependencies automatically, and then builds and installs the library.
 
 ### Quick install (any distro)
 
+From the latest GitHub release:
+
+```bash
+curl -fsSL https://github.com/ektorthebigbro/gnome-rounded-blur/releases/latest/download/install.sh | bash
+```
+
+From a source checkout:
+
 ```bash
 sudo ./install.sh
 ```
