@@ -5,6 +5,7 @@ lib_sources = [
   'liquid-glass-effect.c',
   'adaptive-brightness.c',
   'rounded-blur-mode.c',
+  'haze-status.c',
 ]
 
 # Library headers
@@ -13,6 +14,7 @@ lib_headers = [
   'blur-debug.h',
   'rounded-blur-effect.h',
   'liquid-glass-effect.h',
+  'haze-status.h',
 ]
 
 # Version information
